@@ -5,6 +5,7 @@ class WizardzWidget {
     constructor() {
         this.currentDoctype = null;
         this.wizardConfig = null;
+        this.widget = null;
         this.init();
     }
 
@@ -15,32 +16,80 @@ class WizardzWidget {
             return;
         }
 
+        // Create the widget once and keep it in DOM
+        this.createPersistentWidget();
+
         // Listen for page changes
-        frappe.router.on('change', () => {
-            this.onPageChange();
-        });
+        if (frappe.router) {
+            frappe.router.on('change', () => {
+                this.updateWidgetVisibility();
+            });
+        }
 
         // Initial check
-        this.onPageChange();
+        this.updateWidgetVisibility();
     }
 
-    onPageChange() {
-        // Small delay to ensure page is fully loaded
-        setTimeout(() => {
-            this.checkCurrentPage();
-        }, 500);
+    createPersistentWidget() {
+        // Create widget container that stays in DOM
+        this.widget = document.createElement('div');
+        this.widget.className = 'wizardz-widget';
+        this.widget.style.display = 'none'; // Hidden by default
+        
+        // Always show icon-only button
+        this.widget.innerHTML = `
+            <button class="btn btn-primary btn-sm wizardz-btn" title="AI DocType Assistant">
+                <i class="fa fa-magic"></i>
+            </button>
+        `;
+
+        // Add click handler
+        this.widget.querySelector('.wizardz-btn').addEventListener('click', (e) => {
+            e.preventDefault();
+            this.openWizardModal();
+        });
+
+        // Inject into page - try to find a persistent location
+        this.injectWidget();
     }
 
-    checkCurrentPage() {
-        // Check if we're on a DocType page
+    injectWidget() {
+        // Try to find a persistent container that exists across all pages
+        const persistentContainers = [
+            '.navbar-right',
+            '.navbar .nav',
+            '.navbar',
+            'body'
+        ];
+
+        for (const selector of persistentContainers) {
+            const container = document.querySelector(selector);
+            if (container) {
+                // Create a fixed position container
+                const fixedContainer = document.createElement('div');
+                fixedContainer.style.cssText = `
+                    position: fixed;
+                    top: 10px;
+                    right: 10px;
+                    z-index: 1050;
+                    pointer-events: none;
+                `;
+                fixedContainer.appendChild(this.widget);
+                this.widget.style.pointerEvents = 'auto';
+                
+                container.appendChild(fixedContainer);
+                break;
+            }
+        }
+    }
+
+    async updateWidgetVisibility() {
+        // Check current page and show/hide widget accordingly
         const route = frappe.get_route();
         
-        if (route[0] === 'Form' && route[1]) {
+        if ((route[0] === 'Form' || route[0] === 'List') && route[1]) {
             this.currentDoctype = route[1];
-            this.checkForWizard();
-        } else if (route[0] === 'List' && route[1]) {
-            this.currentDoctype = route[1];
-            this.checkForWizard();
+            await this.checkForWizard();
         } else {
             this.hideWidget();
         }
@@ -62,79 +111,24 @@ class WizardzWidget {
             }
         } catch (error) {
             // Silently hide widget if no wizard is configured or there's an error
-            // Don't log errors to avoid console spam on every page
             this.hideWidget();
         }
     }
 
     showWidget() {
-        // Remove existing widget
-        this.hideWidget();
-
-        // Create widget button
-        const widget = this.createWidget();
-        
-        // Find the best place to inject the widget based on page type
-        let toolbar = null;
-        
-        // Try different toolbar locations for different page types
-        const selectors = [
-            '.page-head .standard-actions',  // Form view
-            '.list-row-container .list-header-subject .list-header-meta', // List view header
-            '.page-actions .standard-actions', // Alternative location
-            '.page-head .page-actions', // Another alternative
-            '.list-page-head .page-actions' // List page specific
-        ];
-        
-        for (const selector of selectors) {
-            toolbar = document.querySelector(selector);
-            if (toolbar) {
-                break;
+        if (this.widget) {
+            this.widget.style.display = 'block';
+            // Update tooltip with current doctype
+            const button = this.widget.querySelector('.wizardz-btn');
+            if (button) {
+                button.title = `AI DocType Assistant - Create new ${this.currentDoctype}`;
             }
         }
-        
-        // If no standard toolbar found, try to inject after page title
-        if (!toolbar) {
-            const pageTitle = document.querySelector('.page-head .page-title');
-            if (pageTitle) {
-                // Create a container for our widget
-                const widgetContainer = document.createElement('div');
-                widgetContainer.style.display = 'inline-block';
-                widgetContainer.style.marginLeft = '15px';
-                widgetContainer.appendChild(widget);
-                pageTitle.appendChild(widgetContainer);
-                return;
-            }
-        }
-        
-        if (toolbar) {
-            toolbar.appendChild(widget);
-        }
-    }
-
-    createWidget() {
-        const widget = document.createElement('div');
-        widget.className = 'wizardz-widget';
-        widget.innerHTML = `
-            <button class="btn btn-primary btn-sm wizardz-btn" title="AI DocType Assistant">
-                <i class="fa fa-magic"></i>
-                <span class="hidden-xs">AI Assistant</span>
-            </button>
-        `;
-
-        // Add click handler
-        widget.querySelector('.wizardz-btn').addEventListener('click', (e) => {
-            e.preventDefault();
-            this.openWizardModal();
-        });
-
-        return widget;
     }
 
     hideWidget() {
-        const existingWidget = document.querySelector('.wizardz-widget');
-        if (existingWidget) {
-            existingWidget.remove();
+        if (this.widget) {
+            this.widget.style.display = 'none';
         }
     }
 
@@ -151,6 +145,7 @@ class WizardzModal {
         this.doctype = doctype;
         this.draftId = null;
         this.conversation = [];
+        this.isExistingDraft = false;
     }
 
     show() {
@@ -182,7 +177,7 @@ class WizardzModal {
             document.body.appendChild(backdrop);
         }
         
-        // Start wizard session
+        // Start wizard session (check for existing drafts first)
         this.startSession();
     }
 
@@ -196,9 +191,15 @@ class WizardzModal {
                                 <i class="fa fa-magic" style="margin-right: 8px;"></i>
                                 AI DocType Assistant - ${this.wizardConfig.wizard_name}
                             </h4>
-                            <button type="button" class="close" data-dismiss="modal" style="color: #6c7680;">
-                                <span>&times;</span>
-                            </button>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <button type="button" class="btn btn-default btn-sm" id="wizardz-new-conversation-btn" 
+                                        title="Start a new conversation" style="color: #6c7680; border: 1px solid #d1d8dd;">
+                                    <i class="fa fa-plus"></i> New
+                                </button>
+                                <button type="button" class="close" data-dismiss="modal" style="color: #6c7680;">
+                                    <span>&times;</span>
+                                </button>
+                            </div>
                         </div>
                         <div class="modal-body" style="height: 70vh; padding: 0; background: white;">
                             <div class="row" style="height: 100%; margin: 0;">
@@ -234,7 +235,7 @@ class WizardzModal {
                                         </div>
                                         <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: white; min-height: 0;">
                                             <div class="loading-message" style="color: #6c7680;">
-                                                <i class="fa fa-spinner fa-spin"></i> Starting wizard session...
+                                                <i class="fa fa-spinner fa-spin"></i> Loading conversation...
                                             </div>
                                         </div>
                                         <div class="chat-input" style="padding: 15px; border-top: 1px solid #d1d8dd; background: white;">
@@ -282,9 +283,86 @@ class WizardzModal {
         document.getElementById('wizardz-create-document-btn').addEventListener('click', () => {
             this.createDocument();
         });
+
+        // New Conversation button
+        document.getElementById('wizardz-new-conversation-btn').addEventListener('click', () => {
+            this.startNewConversation();
+        });
     }
 
     async startSession() {
+        try {
+            // First, check for existing drafts for this doctype and user
+            const existingDraftResponse = await frappe.call({
+                method: 'wizardz.api.get_user_drafts'
+            });
+
+            let existingDraft = null;
+            if (existingDraftResponse.message && existingDraftResponse.message.length > 0) {
+                // Find the most recent draft for this doctype that's not completed
+                existingDraft = existingDraftResponse.message.find(draft => 
+                    draft.target_doctype === this.doctype && 
+                    draft.status !== 'Completed'
+                );
+            }
+
+            if (existingDraft) {
+                // Resume existing draft
+                this.draftId = existingDraft.name;
+                this.isExistingDraft = true;
+                
+                // Load existing conversation and data
+                const draftDataResponse = await frappe.call({
+                    method: 'wizardz.api.get_draft_data',
+                    args: { draft_id: this.draftId }
+                });
+
+                if (draftDataResponse.message.success) {
+                    // Load conversation history
+                    const conversation = draftDataResponse.message.conversation;
+                    
+                    // Clear loading message
+                    const loadingMessage = document.querySelector('.loading-message');
+                    if (loadingMessage) {
+                        loadingMessage.remove();
+                    }
+
+                    // Display conversation history
+                    if (conversation && conversation.length > 0) {
+                        conversation.forEach(msg => {
+                            if (msg.type !== 'system' || !msg.content.includes('Started wizard session')) {
+                                this.addMessage(msg.type, msg.content);
+                            }
+                        });
+                    }
+
+                    // Update preview with existing data
+                    if (draftDataResponse.message.draft_data) {
+                        this.updatePreview(draftDataResponse.message.draft_data);
+                    }
+
+                    // Update button based on status
+                    this.updateButtonForMode(draftDataResponse.message.status);
+
+                    // Add resumption message
+                    this.addMessage('system', `Resumed conversation for ${this.doctype} draft`);
+                    
+                    this.enableInput();
+                } else {
+                    // If we can't load the draft data, start fresh
+                    this.startNewSession();
+                }
+            } else {
+                // Start new session
+                this.startNewSession();
+            }
+        } catch (error) {
+            this.addMessage('system', 'Error loading conversation: ' + error.message);
+            this.startNewSession();
+        }
+    }
+
+    async startNewSession() {
         try {
             const response = await frappe.call({
                 method: 'wizardz.api.start_wizard_session',
@@ -297,9 +375,15 @@ class WizardzModal {
 
             if (response.message.success) {
                 this.draftId = response.message.draft_id;
-                this.addMessage('system', response.message.message);
+                this.isExistingDraft = false;
                 
-                // Get initial AI greeting from OpenAI API
+                // Clear loading message
+                const loadingMessage = document.querySelector('.loading-message');
+                if (loadingMessage) {
+                    loadingMessage.remove();
+                }
+                
+                // Get initial AI greeting for new sessions only
                 this.getInitialGreeting();
             } else {
                 this.addMessage('system', 'Error starting wizard session: ' + response.message.error);
@@ -311,7 +395,7 @@ class WizardzModal {
 
     async getInitialGreeting() {
         try {
-            // Send an empty initial message to get AI's greeting
+            // Only send initial greeting for new sessions
             const response = await frappe.call({
                 method: 'wizardz.api.send_message',
                 args: {
@@ -332,6 +416,47 @@ class WizardzModal {
             this.addMessage('system', 'Error getting initial greeting: ' + error.message);
             this.enableInput();
         }
+    }
+
+    async startNewConversation() {
+        // Confirm with user before starting new conversation
+        if (this.draftId && this.isExistingDraft) {
+            const confirmed = confirm('Are you sure you want to start a new conversation? This will create a new draft and you can return to your previous conversation later.');
+            if (!confirmed) {
+                return;
+            }
+        }
+
+        // Clear the chat messages
+        const messagesContainer = document.querySelector('.chat-messages');
+        messagesContainer.innerHTML = `
+            <div class="loading-message" style="color: #6c7680;">
+                <i class="fa fa-spinner fa-spin"></i> Starting new conversation...
+            </div>
+        `;
+
+        // Clear the preview
+        this.updatePreview({});
+
+        // Reset button to default state
+        const button = document.getElementById('wizardz-create-document-btn');
+        if (button) {
+            button.innerHTML = `<i class="fa fa-save"></i> Create ${this.doctype}`;
+            button.className = 'btn btn-success btn-sm';
+            button.style.marginRight = '10px';
+            button.disabled = true;
+        }
+
+        // Disable input while starting new session
+        this.disableInput();
+
+        // Reset state
+        this.draftId = null;
+        this.isExistingDraft = false;
+        this.conversation = [];
+
+        // Start a completely new session
+        await this.startNewSession();
     }
 
     async sendMessage() {
@@ -405,12 +530,6 @@ class WizardzModal {
             <div style="color: #36414c; line-height: 1.4;">${content}</div>
         `;
 
-        // Remove loading message if it exists
-        const loadingMessage = messagesContainer.querySelector('.loading-message');
-        if (loadingMessage) {
-            loadingMessage.remove();
-        }
-
         messagesContainer.appendChild(messageDiv);
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
@@ -475,16 +594,60 @@ class WizardzModal {
         let previewHtml = `<div class="${this.doctype.toLowerCase()}-preview">`;
         previewHtml += `<h6 style="color: #36414c; margin-bottom: 15px; border-bottom: 1px solid #d1d8dd; padding-bottom: 5px;">${this.doctype} Record</h6>`;
         
-        // Display each field that has data
-        for (const [fieldName, value] of Object.entries(draftData)) {
-            if (value && value.toString().trim()) {
-                const displayName = this.formatFieldName(fieldName);
-                previewHtml += `
-                    <div class="field-preview" style="margin-bottom: 10px;">
-                        <strong style="color: #6c7680; font-size: 12px; text-transform: uppercase;">${displayName}:</strong>
-                        <div style="color: #36414c; margin-top: 2px;">${this.escapeHtml(value)}</div>
-                    </div>
-                `;
+        // Handle multi-doctype data specially
+        if (draftData._multi_doctype) {
+            // Show main doctype fields first
+            for (const [fieldName, value] of Object.entries(draftData)) {
+                if (fieldName !== '_multi_doctype' && value && value.toString().trim()) {
+                    const displayName = this.formatFieldName(fieldName);
+                    previewHtml += `
+                        <div class="field-preview" style="margin-bottom: 10px;">
+                            <strong style="color: #6c7680; font-size: 12px; text-transform: uppercase;">${displayName}:</strong>
+                            <div style="color: #36414c; margin-top: 2px;">${this.escapeHtml(value)}</div>
+                        </div>
+                    `;
+                }
+            }
+
+            // Show dependent doctypes
+            const multiData = draftData._multi_doctype;
+            if (multiData.doctypes && Object.keys(multiData.doctypes).length > 0) {
+                previewHtml += `<div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #d1d8dd;">`;
+                previewHtml += `<h6 style="color: #36414c; margin-bottom: 10px; font-size: 12px; text-transform: uppercase; color: #6c7680;">Dependent Records:</h6>`;
+                
+                for (const [doctype, doctypeData] of Object.entries(multiData.doctypes)) {
+                    if (doctypeData && Object.keys(doctypeData).length > 0) {
+                        previewHtml += `<div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 3px;">`;
+                        previewHtml += `<strong style="color: #36414c; font-size: 13px;">${doctype}:</strong>`;
+                        
+                        for (const [fieldName, value] of Object.entries(doctypeData)) {
+                            if (value && value.toString().trim()) {
+                                const displayName = this.formatFieldName(fieldName);
+                                previewHtml += `
+                                    <div style="margin-left: 10px; margin-top: 5px;">
+                                        <span style="color: #6c7680; font-size: 11px; text-transform: uppercase;">${displayName}:</span>
+                                        <span style="color: #36414c; margin-left: 5px;">${this.escapeHtml(value)}</span>
+                                    </div>
+                                `;
+                            }
+                        }
+                        previewHtml += `</div>`;
+                    }
+                }
+                previewHtml += `</div>`;
+            }
+        } else {
+            // Display each field that has data (single doctype mode)
+            for (const [fieldName, value] of Object.entries(draftData)) {
+                if (value && value.toString().trim()) {
+                    const displayName = this.formatFieldName(fieldName);
+                    previewHtml += `
+                        <div class="field-preview" style="margin-bottom: 10px;">
+                            <strong style="color: #6c7680; font-size: 12px; text-transform: uppercase;">${displayName}:</strong>
+                            <div style="color: #36414c; margin-top: 2px;">${this.escapeHtml(value)}</div>
+                        </div>
+                    `;
+                }
             }
         }
         

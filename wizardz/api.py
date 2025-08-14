@@ -345,7 +345,26 @@ def build_base_messages(draft, wizard_config):
 
 def generate_base_system_prompt(target_doctype):
     """Generate the base system prompt dynamically"""
+    # Get current user context
+    current_user = frappe.session.user
+    user_full_name = frappe.db.get_value("User", current_user, "full_name") or current_user
+    current_datetime = frappe.utils.now_datetime().strftime("%Y-%m-%d %H:%M:%S")
+    current_date = frappe.utils.today()
+    
     return f"""You are an AI assistant specialized in helping users create and update {target_doctype} records in Frappe/ERPNext systems. You have access to the actual {target_doctype} DocType schema with field metadata and tools to manage draft data.
+
+## Current Session Context:
+- **Current User**: {user_full_name} (Email: {current_user})
+- **Current Date**: {current_date}
+- **Current DateTime**: {current_datetime}
+- **System Timezone**: {frappe.utils.get_system_timezone()}
+
+## Important Context Rules:
+- When the user says "me", "myself", or "I", they are referring to: {user_full_name}
+- When the user says "today" or "now", use the current date: {current_date}
+- When asking for dates, provide the current date as context or default suggestion
+- When asking for user assignments, suggest the current user ({user_full_name}) as a default option
+- Always use the user's full name ({user_full_name}) when creating records that reference the current user
 
 ## Your Role & Capabilities:
 - Access to the complete {target_doctype} DocType schema including field metadata
@@ -1221,3 +1240,25 @@ def get_user_drafts():
     )
     
     return drafts
+
+
+@frappe.whitelist()
+def get_draft_data(draft_id):
+    """Get draft data with conversation history for resuming sessions"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to view this draft"))
+        
+        return {
+            "success": True,
+            "draft_data": draft.get_draft_data_dict(),
+            "conversation": draft.get_conversation_history_list(),
+            "status": draft.status
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error getting draft data for resumption", f"Draft ID: {draft_id}, Error: {str(e)}")
+        return {"success": False, "error": str(e)}

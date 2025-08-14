@@ -26,7 +26,10 @@ app_license = "mit"
 
 # include js, css files in header of desk.html
 app_include_css = "/assets/wizardz/css/wizardz_widget.css"
-app_include_js = "/assets/wizardz/js/wizardz_widget.js"
+app_include_js = [
+    "/assets/wizardz/js/wizardz_form.js",  # Form view integration
+    "/assets/wizardz/js/wizardz_list.js"   # List view integration
+]
 
 # include js, css files in header of web template
 # web_include_css = "/assets/wizardz/css/wizardz.css"
@@ -43,8 +46,8 @@ app_include_js = "/assets/wizardz/js/wizardz_widget.js"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+# doctype_js = {"doctype" : "public/js/doctype.js"}  # Wildcard not reliable, using app_include_js instead
+# doctype_list_js = {"*": "public/js/wizardz_list.js"}  # Wildcard not reliable, using app_include_js instead
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 

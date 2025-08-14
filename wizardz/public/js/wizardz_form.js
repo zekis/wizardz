@@ -1,159 +1,150 @@
-// Wizardz Widget - Injects AI assistant button into Frappe desk pages
+// Wizardz Form View Integration - Adds AI Assistant button to form views
 // Copyright (c) 2025, TierneyMorris Pty Ltd
 
-class WizardzWidget {
-    constructor() {
-        this.currentDoctype = null;
-        this.wizardConfig = null;
-        this.init();
-    }
+frappe.provide('wizardz');
 
-    init() {
-        // Wait for Frappe to be ready
-        if (typeof frappe === 'undefined') {
-            setTimeout(() => this.init(), 100);
-            return;
-        }
+// Global wizard configurations cache (shared with list view)
+wizardz.configurations = wizardz.configurations || {};
 
-        // Modify Frappe's page template to inject our button
-        this.injectButtonIntoTemplate();
-
-        // Set up click handler for our button
-        this.setupClickHandler();
-
-        // Listen for page changes to show/hide button
-        if (frappe.router) {
-            frappe.router.on('change', () => {
-                this.updateButtonVisibility();
-            });
-        }
-
-        // Initial check
-        this.updateButtonVisibility();
-    }
-
-    injectButtonIntoTemplate() {
-        // Try to inject button directly into existing standard-actions
-        this.injectButtonDirectly();
-        
-        // Also modify template as fallback
-        if (frappe.templates && frappe.templates['page']) {
-            frappe.templates['page'] = frappe.templates['page'].replace(
-                /<div class="standard-actions flex">([\s\S]*?)<\/div>/,
-                (match, inner) => {
-                    // Avoid duplicate injection
-                    if (inner.includes('wizardz-ai-button')) return match;
-                    
-                    return `<div class="standard-actions flex">
-                        <button id="wizardz-ai-button" class="btn btn-primary btn-sm" title="AI DocType Assistant" style="margin-right: 8px; display: none;">
-                            <i class="fa fa-magic"></i>
-                        </button>
-                        ${inner}
-                    </div>`;
-                }
-            );
-        }
-    }
-
-    injectButtonDirectly() {
-        // Try to find existing standard-actions and inject button
-        const standardActions = document.querySelector('.standard-actions.flex');
-        if (standardActions && !document.getElementById('wizardz-ai-button')) {
-            const button = document.createElement('button');
-            button.id = 'wizardz-ai-button';
-            button.className = 'btn btn-primary btn-sm';
-            button.title = 'AI DocType Assistant';
-            button.style.cssText = 'margin-right: 8px; display: none;';
-            button.innerHTML = '<i class="fa fa-magic"></i>';
+// Reliable page change detection approach using Frappe's native router
+$(document).ready(function() {
+    // Wait for Frappe to be available
+    function waitForFrappe() {
+        if (typeof frappe !== 'undefined' && frappe.router) {
+            // Use Frappe's native router event - much more reliable
+            frappe.router.on("change", page_changed);
             
-            // Insert as first child
-            standardActions.insertBefore(button, standardActions.firstChild);
-        }
-    }
-
-    setupClickHandler() {
-        // Set up click handler for our AI button
-        document.addEventListener('click', async (event) => {
-            const button = event.target.closest('#wizardz-ai-button');
-            if (!button) return;
-
-            event.preventDefault();
+            // Also trigger on initial load
+            page_changed();
             
-            const route = frappe.get_route();
-            const view = route[0];
-            const documentType = route[1];
-            
-            console.log("Wizardz: AI button clicked - View:", view, "DocType:", documentType);
-            
-            // Open the wizard modal
-            if (this.wizardConfig) {
-                const modal = new WizardzModal(this.wizardConfig, documentType);
-                modal.show();
-            }
-        });
-    }
-
-    async updateButtonVisibility() {
-        // Re-inject button on every page change to handle DOM changes
-        this.injectButtonDirectly();
-        
-        // Check current page and show/hide button accordingly
-        const route = frappe.get_route();
-        
-        // Add null check for route
-        if (!route || !Array.isArray(route) || route.length < 2) {
-            this.hideButton();
-            return;
-        }
-        
-        if ((route[0] === 'Form' || route[0] === 'List') && route[1]) {
-            this.currentDoctype = route[1];
-            await this.checkForWizard();
+            console.log('Wizardz: Router integration initialized');
         } else {
-            this.hideButton();
+            // Retry after a short delay
+            setTimeout(waitForFrappe, 100);
         }
     }
+    
+    waitForFrappe();
+});
 
-    async checkForWizard() {
-        try {
-            // Check if there's a wizard for this doctype
-            const response = await frappe.call({
-                method: 'wizardz.api.get_wizard_for_doctype',
-                args: { doctype: this.currentDoctype }
+function page_changed(event) {
+    // Wait for page to load completely
+    frappe.after_ajax(function() {
+        var route = frappe.get_route();
+        
+        // Check if route exists and has elements
+        if (!route || !Array.isArray(route) || route.length === 0) {
+            return;
+        }
+        
+        // Handle Form views
+        if (route[0] == "Form" && route[1]) {
+            var doctype = route[1];
+            
+            // Set up form event handler for this specific doctype
+            frappe.ui.form.on(doctype, {
+                refresh: function(frm) {
+                    // Only add to form views, not other views
+                    if (!frm || !frm.doctype) return;
+                    
+                    // Check if this doctype has a wizard configuration
+                    checkForWizardConfiguration(frm.doctype, function(hasWizard, config) {
+                        if (hasWizard) {
+                            addAIAssistantButton(frm, config);
+                        }
+                    });
+                }
             });
-
-            if (response.message) {
-                this.wizardConfig = response.message;
-                this.showButton();
-            } else {
-                this.hideButton();
-            }
-        } catch (error) {
-            // Silently hide button if no wizard is configured or there's an error
-            this.hideButton();
+            
+            console.log(`Wizardz: Form integration setup for ${doctype}`);
         }
-    }
-
-    showButton() {
-        const button = document.getElementById('wizardz-ai-button');
-        if (button) {
-            button.style.display = 'inline-block';
-            button.title = `AI DocType Assistant - Create new ${this.currentDoctype}`;
-        }
-    }
-
-    hideButton() {
-        const button = document.getElementById('wizardz-ai-button');
-        if (button) {
-            button.style.display = 'none';
-        }
-    }
+        
+        // List views are handled by wizardz_list.js
+    });
 }
 
-class WizardzModal {
-    constructor(wizardConfig, doctype) {
+function checkForWizardConfiguration(doctype, callback) {
+    // Check cache first
+    if (wizardz.configurations[doctype] !== undefined) {
+        const config = wizardz.configurations[doctype];
+        callback(config !== null, config);
+        return;
+    }
+    
+    // Check for wizard configuration
+    frappe.call({
+        method: 'wizardz.api.get_wizard_for_doctype',
+        args: { doctype: doctype },
+        callback: function(response) {
+            if (response.message) {
+                wizardz.configurations[doctype] = response.message;
+                callback(true, response.message);
+            } else {
+                wizardz.configurations[doctype] = null;
+                callback(false, null);
+            }
+        },
+        error: function() {
+            wizardz.configurations[doctype] = null;
+            callback(false, null);
+        }
+    });
+}
+
+function addAIAssistantButton(frm, wizard_config) {
+    // Check if button already exists
+    if (frm.custom_buttons && frm.custom_buttons['AI Assistant']) {
+        return;
+    }
+    
+    // Determine button text based on document state
+    let buttonText = 'AI Assistant';
+    let buttonAction = 'create';
+    
+    if (frm.doc.name && frm.doc.name !== 'new-' + frm.doctype.toLowerCase().replace(' ', '-')) {
+        // Existing document - update mode
+        buttonText = 'AI Update';
+        buttonAction = 'update';
+    }
+    
+    // Add AI Assistant button as primary button to the form toolbar
+    frm.add_custom_button(
+        __(buttonText),
+        function() {
+            openWizardModal(wizard_config, frm.doctype, frm.doc, buttonAction);
+        }
+        // No group parameter = primary button in toolbar
+    );
+    
+    // Style the button with primary color and icon
+    const button = frm.custom_buttons[buttonText];
+    if (button) {
+        button.addClass('btn-primary wizardz-ai-btn');
+        button.prepend('<i class="fa fa-magic" style="margin-right: 5px;"></i>');
+        
+        if (buttonAction === 'update') {
+            button.attr('title', `AI Assistant - Update this ${frm.doctype} record`);
+        } else {
+            button.attr('title', `AI Assistant - Create new ${frm.doctype} record`);
+        }
+    }
+    
+    console.log(`Wizardz: Added AI Assistant button to ${frm.doctype} form view (${buttonAction} mode)`);
+}
+
+function openWizardModal(wizard_config, doctype, doc, action) {
+    // Create and show the wizard modal
+    const modal = new WizardzFormModal(wizard_config, doctype, doc, action);
+    modal.show();
+}
+
+// Enhanced Modal class for form views (supports both create and update)
+class WizardzFormModal {
+    constructor(wizardConfig, doctype, doc, action) {
         this.wizardConfig = wizardConfig;
         this.doctype = doctype;
+        this.doc = doc || {};
+        this.action = action || 'create'; // 'create' or 'update'
         this.draftId = null;
         this.conversation = [];
         this.isExistingDraft = false;
@@ -188,11 +179,14 @@ class WizardzModal {
             document.body.appendChild(backdrop);
         }
         
-        // Start wizard session (check for existing drafts first)
+        // Start wizard session
         this.startSession();
     }
 
     createModalHtml() {
+        const actionText = this.action === 'update' ? 'Update' : 'Create';
+        const modeText = this.action === 'update' ? `Updating ${this.doc.name}` : `Creating new ${this.doctype} record`;
+        
         return `
             <div id="wizardz-modal" class="modal fade" style="display: none;">
                 <div class="modal-dialog modal-lg" style="width: 90%; max-width: 1200px;">
@@ -219,7 +213,7 @@ class WizardzModal {
                                     <div class="wizardz-preview-panel" style="height: 100%; display: flex; flex-direction: column; background: white;">
                                         <div class="preview-header" style="padding: 15px !important; border-bottom: 1px solid #d1d8dd !important; background: white !important; background-color: white !important;">
                                             <h5 style="margin: 0 !important; color: #36414c !important; font-weight: 500 !important; background: transparent !important;">${this.doctype} Form Preview</h5>
-                                            <small style="color: #6c7680 !important; background: transparent !important;">Live preview of your ${this.doctype} record</small>
+                                            <small style="color: #6c7680 !important; background: transparent !important;">${modeText}</small>
                                         </div>
                                         <div class="preview-content" style="flex: 1; overflow-y: auto; padding: 15px; background: white;">
                                             <div class="preview-placeholder text-center" style="padding: 50px; color: #6c7680;">
@@ -230,7 +224,7 @@ class WizardzModal {
                                         <div class="preview-actions" style="padding: 15px; border-top: 1px solid #d1d8dd; background: white;">
                                             <button class="btn btn-success btn-sm" id="wizardz-create-document-btn" disabled
                                                     style="margin-right: 10px;">
-                                                <i class="fa fa-save"></i> Create ${this.doctype}
+                                                <i class="fa fa-save"></i> ${actionText} ${this.doctype}
                                             </button>
                                             <small style="color: #6c7680; font-style: italic;">Draft is saved automatically as you provide information</small>
                                         </div>
@@ -242,7 +236,7 @@ class WizardzModal {
                                     <div class="wizardz-chat-panel" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: white;">
                                         <div class="chat-header" style="padding: 15px !important; border-bottom: 1px solid #d1d8dd !important; background: white !important; background-color: white !important;">
                                             <h5 style="margin: 0 !important; color: #36414c !important; font-weight: 500 !important; background: transparent !important;">Chat with AI Assistant</h5>
-                                            <small style="color: #6c7680 !important; background: transparent !important;">Creating new ${this.doctype} record</small>
+                                            <small style="color: #6c7680 !important; background: transparent !important;">${modeText}</small>
                                         </div>
                                         <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: white; min-height: 0;">
                                             <div class="loading-message" style="color: #6c7680;">
@@ -290,9 +284,13 @@ class WizardzModal {
             this.sendMessage();
         });
 
-        // Create Document button
+        // Create/Update Document button
         document.getElementById('wizardz-create-document-btn').addEventListener('click', () => {
-            this.createDocument();
+            if (this.action === 'update') {
+                this.updateDocument();
+            } else {
+                this.createDocument();
+            }
         });
 
         // New Conversation button
@@ -303,85 +301,25 @@ class WizardzModal {
 
     async startSession() {
         try {
-            // First, check for existing drafts for this doctype and user
-            const existingDraftResponse = await frappe.call({
-                method: 'wizardz.api.get_user_drafts'
-            });
+            let sessionData = {
+                wizard_config: this.wizardConfig.name,
+                target_doctype: this.doctype
+            };
 
-            let existingDraft = null;
-            if (existingDraftResponse.message && existingDraftResponse.message.length > 0) {
-                // Find the most recent draft for this doctype that's not completed
-                existingDraft = existingDraftResponse.message.find(draft => 
-                    draft.target_doctype === this.doctype && 
-                    draft.status !== 'Completed'
-                );
-            }
-
-            if (existingDraft) {
-                // Resume existing draft
-                this.draftId = existingDraft.name;
-                this.isExistingDraft = true;
-                
-                // Load existing conversation and data
-                const draftDataResponse = await frappe.call({
-                    method: 'wizardz.api.get_draft_data',
-                    args: { draft_id: this.draftId }
-                });
-
-                if (draftDataResponse.message.success) {
-                    // Load conversation history
-                    const conversation = draftDataResponse.message.conversation;
-                    
-                    // Clear loading message
-                    const loadingMessage = document.querySelector('.loading-message');
-                    if (loadingMessage) {
-                        loadingMessage.remove();
-                    }
-
-                    // Display conversation history
-                    if (conversation && conversation.length > 0) {
-                        conversation.forEach(msg => {
-                            if (msg.type !== 'system' || !msg.content.includes('Started wizard session')) {
-                                this.addMessage(msg.type, msg.content);
-                            }
-                        });
-                    }
-
-                    // Update preview with existing data
-                    if (draftDataResponse.message.draft_data) {
-                        this.updatePreview(draftDataResponse.message.draft_data);
-                    }
-
-                    // Update button based on status
-                    this.updateButtonForMode(draftDataResponse.message.status);
-
-                    // Add resumption message
-                    this.addMessage('system', `Resumed conversation for ${this.doctype} draft`);
-                    
-                    this.enableInput();
-                } else {
-                    // If we can't load the draft data, start fresh
-                    this.startNewSession();
-                }
+            if (this.action === 'update') {
+                // Update mode - include existing document data
+                sessionData.draft_name = `Update ${this.doctype} - ${this.doc.name}`;
+                sessionData.existing_doc = this.doc;
+                sessionData.mode = 'update';
             } else {
-                // Start new session
-                this.startNewSession();
+                // Create mode
+                sessionData.draft_name = `${this.doctype} - ${new Date().toLocaleString()}`;
+                sessionData.mode = 'create';
             }
-        } catch (error) {
-            this.addMessage('system', 'Error loading conversation: ' + error.message);
-            this.startNewSession();
-        }
-    }
 
-    async startNewSession() {
-        try {
             const response = await frappe.call({
                 method: 'wizardz.api.start_wizard_session',
-                args: {
-                    wizard_config: this.wizardConfig.name,
-                    draft_name: `${this.doctype} - ${new Date().toLocaleString()}`,
-                    target_doctype: this.doctype
-                }
+                args: sessionData
             });
 
             if (response.message.success) {
@@ -394,7 +332,7 @@ class WizardzModal {
                     loadingMessage.remove();
                 }
                 
-                // Get initial AI greeting for new sessions only
+                // Get initial AI greeting
                 this.getInitialGreeting();
             } else {
                 this.addMessage('system', 'Error starting wizard session: ' + response.message.error);
@@ -406,18 +344,29 @@ class WizardzModal {
 
     async getInitialGreeting() {
         try {
-            // Only send initial greeting for new sessions
+            let initialMessage = "Please start the conversation and introduce yourself.";
+            
+            if (this.action === 'update') {
+                initialMessage = `Please start the conversation for updating this ${this.doctype} record. The current document data has been loaded for context.`;
+            }
+
             const response = await frappe.call({
                 method: 'wizardz.api.send_message',
                 args: {
                     draft_id: this.draftId,
-                    message: "Please start the conversation and introduce yourself.",
+                    message: initialMessage,
                     message_type: "system"
                 }
             });
 
             if (response.message.success) {
                 this.addMessage('assistant', response.message.response);
+                
+                // If in update mode, show current document data in preview
+                if (this.action === 'update') {
+                    this.updatePreview(this.doc);
+                }
+                
                 this.enableInput();
             } else {
                 this.addMessage('system', 'Error getting initial greeting: ' + response.message.error);
@@ -446,13 +395,16 @@ class WizardzModal {
             </div>
         `;
 
-        // Clear the preview
-        this.updatePreview({});
+        // Clear the preview (unless in update mode)
+        if (this.action !== 'update') {
+            this.updatePreview({});
+        }
 
         // Reset button to default state
         const button = document.getElementById('wizardz-create-document-btn');
         if (button) {
-            button.innerHTML = `<i class="fa fa-save"></i> Create ${this.doctype}`;
+            const actionText = this.action === 'update' ? 'Update' : 'Create';
+            button.innerHTML = `<i class="fa fa-save"></i> ${actionText} ${this.doctype}`;
             button.className = 'btn btn-success btn-sm';
             button.style.marginRight = '10px';
             button.disabled = true;
@@ -467,7 +419,7 @@ class WizardzModal {
         this.conversation = [];
 
         // Start a completely new session
-        await this.startNewSession();
+        await this.startSession();
     }
 
     async sendMessage() {
@@ -500,11 +452,6 @@ class WizardzModal {
                 
                 // Update button text based on draft status
                 this.updateButtonForMode(response.message.draft_status);
-                
-                // Update preview if draft status changed
-                if (response.message.draft_status === 'Ready to Deploy') {
-                    this.enableDeployButton();
-                }
             } else {
                 this.addMessage('system', 'Error: ' + response.message.error);
             }
@@ -555,7 +502,7 @@ class WizardzModal {
         // Auto-focus the input field for better UX
         messageInput.focus();
         
-        // Enable create document button if it exists
+        // Enable create/update document button if it exists
         const createBtn = document.getElementById('wizardz-create-document-btn');
         if (createBtn) {
             createBtn.disabled = false;
@@ -567,21 +514,20 @@ class WizardzModal {
         document.getElementById('wizardz-send-btn').disabled = true;
     }
 
-    enableDeployButton() {
-        document.getElementById('wizardz-deploy-btn').disabled = false;
-    }
-
     updateButtonForMode(draftStatus) {
         const button = document.getElementById('wizardz-create-document-btn');
         if (!button) return;
 
+        const actionText = this.action === 'update' ? 'Update' : 'Create';
+        const iconClass = this.action === 'update' ? 'fa-edit' : 'fa-save';
+
         // Update button text and style based on draft status
-        if (draftStatus === 'Update Mode') {
-            button.innerHTML = `<i class="fa fa-edit"></i> Update ${this.doctype}`;
+        if (draftStatus === 'Update Mode' || this.action === 'update') {
+            button.innerHTML = `<i class="fa ${iconClass}"></i> ${actionText} ${this.doctype}`;
             button.className = 'btn btn-warning btn-sm';
             button.style.marginRight = '10px';
         } else {
-            button.innerHTML = `<i class="fa fa-save"></i> Create ${this.doctype}`;
+            button.innerHTML = `<i class="fa ${iconClass}"></i> ${actionText} ${this.doctype}`;
             button.className = 'btn btn-success btn-sm';
             button.style.marginRight = '10px';
         }
@@ -605,60 +551,16 @@ class WizardzModal {
         let previewHtml = `<div class="${this.doctype.toLowerCase()}-preview">`;
         previewHtml += `<h6 style="color: #36414c; margin-bottom: 15px; border-bottom: 1px solid #d1d8dd; padding-bottom: 5px;">${this.doctype} Record</h6>`;
         
-        // Handle multi-doctype data specially
-        if (draftData._multi_doctype) {
-            // Show main doctype fields first
-            for (const [fieldName, value] of Object.entries(draftData)) {
-                if (fieldName !== '_multi_doctype' && value && value.toString().trim()) {
-                    const displayName = this.formatFieldName(fieldName);
-                    previewHtml += `
-                        <div class="field-preview" style="margin-bottom: 10px;">
-                            <strong style="color: #6c7680; font-size: 12px; text-transform: uppercase;">${displayName}:</strong>
-                            <div style="color: #36414c; margin-top: 2px;">${this.escapeHtml(value)}</div>
-                        </div>
-                    `;
-                }
-            }
-
-            // Show dependent doctypes
-            const multiData = draftData._multi_doctype;
-            if (multiData.doctypes && Object.keys(multiData.doctypes).length > 0) {
-                previewHtml += `<div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #d1d8dd;">`;
-                previewHtml += `<h6 style="color: #36414c; margin-bottom: 10px; font-size: 12px; text-transform: uppercase; color: #6c7680;">Dependent Records:</h6>`;
-                
-                for (const [doctype, doctypeData] of Object.entries(multiData.doctypes)) {
-                    if (doctypeData && Object.keys(doctypeData).length > 0) {
-                        previewHtml += `<div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 3px;">`;
-                        previewHtml += `<strong style="color: #36414c; font-size: 13px;">${doctype}:</strong>`;
-                        
-                        for (const [fieldName, value] of Object.entries(doctypeData)) {
-                            if (value && value.toString().trim()) {
-                                const displayName = this.formatFieldName(fieldName);
-                                previewHtml += `
-                                    <div style="margin-left: 10px; margin-top: 5px;">
-                                        <span style="color: #6c7680; font-size: 11px; text-transform: uppercase;">${displayName}:</span>
-                                        <span style="color: #36414c; margin-left: 5px;">${this.escapeHtml(value)}</span>
-                                    </div>
-                                `;
-                            }
-                        }
-                        previewHtml += `</div>`;
-                    }
-                }
-                previewHtml += `</div>`;
-            }
-        } else {
-            // Display each field that has data (single doctype mode)
-            for (const [fieldName, value] of Object.entries(draftData)) {
-                if (value && value.toString().trim()) {
-                    const displayName = this.formatFieldName(fieldName);
-                    previewHtml += `
-                        <div class="field-preview" style="margin-bottom: 10px;">
-                            <strong style="color: #6c7680; font-size: 12px; text-transform: uppercase;">${displayName}:</strong>
-                            <div style="color: #36414c; margin-top: 2px;">${this.escapeHtml(value)}</div>
-                        </div>
-                    `;
-                }
+        // Display each field that has data
+        for (const [fieldName, value] of Object.entries(draftData)) {
+            if (value && value.toString().trim() && fieldName !== '_multi_doctype') {
+                const displayName = this.formatFieldName(fieldName);
+                previewHtml += `
+                    <div class="field-preview" style="margin-bottom: 10px;">
+                        <strong style="color: #6c7680; font-size: 12px; text-transform: uppercase;">${displayName}:</strong>
+                        <div style="color: #36414c; margin-top: 2px;">${this.escapeHtml(value)}</div>
+                    </div>
+                `;
             }
         }
         
@@ -708,24 +610,7 @@ class WizardzModal {
                     this.close();
                 }, 2000);
             } else {
-                // Show validation errors in chat first
-                this.addMessage('system', `❌ Validation errors found:\n${response.message.error}`);
-                this.addMessage('system', '🤖 Sending errors to AI for correction...');
-                
-                const aiResponse = await frappe.call({
-                    method: 'wizardz.api.send_message',
-                    args: {
-                        draft_id: this.draftId,
-                        message: `Document creation failed with validation errors: ${response.message.error}. Please fix these issues and ask the user for any missing required information.`,
-                        message_type: "system"
-                    }
-                });
-
-                if (aiResponse.message.success) {
-                    this.addMessage('assistant', aiResponse.message.response);
-                } else {
-                    this.addMessage('system', '❌ Error getting AI correction: ' + aiResponse.message.error);
-                }
+                this.handleDocumentError(response.message.error);
             }
         } catch (error) {
             this.addMessage('system', `❌ Error creating ${this.doctype}: ` + error.message);
@@ -733,6 +618,68 @@ class WizardzModal {
             // Re-enable button
             button.disabled = false;
             button.innerHTML = `<i class="fa fa-save"></i> Create ${this.doctype}`;
+        }
+    }
+
+    async updateDocument() {
+        if (!this.draftId) return;
+
+        // Disable button and show loading
+        const button = document.getElementById('wizardz-create-document-btn');
+        button.disabled = true;
+        button.innerHTML = `<i class="fa fa-spinner fa-spin"></i> Updating ${this.doctype}...`;
+
+        try {
+            const response = await frappe.call({
+                method: 'wizardz.api.update_document_from_draft',
+                args: {
+                    draft_id: this.draftId,
+                    existing_doc_name: this.doc.name
+                }
+            });
+
+            if (response.message.success) {
+                this.addMessage('system', `✅ ${this.doctype} updated successfully: ${response.message.document_name}`);
+                frappe.show_alert({
+                    message: `${this.doctype} '${response.message.document_name}' updated successfully!`,
+                    indicator: 'green'
+                });
+                
+                // Refresh the current form
+                setTimeout(() => {
+                    cur_frm.reload_doc();
+                    this.close();
+                }, 2000);
+            } else {
+                this.handleDocumentError(response.message.error);
+            }
+        } catch (error) {
+            this.addMessage('system', `❌ Error updating ${this.doctype}: ` + error.message);
+        } finally {
+            // Re-enable button
+            button.disabled = false;
+            button.innerHTML = `<i class="fa fa-edit"></i> Update ${this.doctype}`;
+        }
+    }
+
+    async handleDocumentError(error) {
+        // Show validation errors in chat first
+        this.addMessage('system', `❌ Validation errors found:\n${error}`);
+        this.addMessage('system', '🤖 Sending errors to AI for correction...');
+        
+        const aiResponse = await frappe.call({
+            method: 'wizardz.api.send_message',
+            args: {
+                draft_id: this.draftId,
+                message: `Document ${this.action} failed with validation errors: ${error}. Please fix these issues and ask the user for any missing required information.`,
+                message_type: "system"
+            }
+        });
+
+        if (aiResponse.message.success) {
+            this.addMessage('assistant', aiResponse.message.response);
+        } else {
+            this.addMessage('system', '❌ Error getting AI correction: ' + aiResponse.message.error);
         }
     }
 
@@ -758,18 +705,4 @@ class WizardzModal {
             }
         }
     }
-}
-
-// Initialize the widget when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    new WizardzWidget();
-});
-
-// Also initialize if DOM is already ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        new WizardzWidget();
-    });
-} else {
-    new WizardzWidget();
 }

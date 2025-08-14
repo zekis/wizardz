@@ -611,70 +611,107 @@ def save_draft_data(draft_id, draft_data):
 
 
 @frappe.whitelist()
-def get_draft_data(draft_id):
-    """Get draft doctype data"""
+def create_document_from_draft(draft_id):
+    """Create a document from a draft"""
     try:
         draft = frappe.get_doc("Wizardz Draft", draft_id)
-        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
         
-        if not wizard_config.has_permission_for_user():
-            frappe.throw(_("You don't have permission to view this draft"))
+        # Parse the draft data
+        draft_data = json.loads(draft.draft_data) if draft.draft_data else {}
+        
+        if not draft_data:
+            return {"success": False, "error": "No draft data found"}
+        
+        # Create the document
+        doc = frappe.new_doc(draft.target_doctype)
+        
+        # Handle multi-doctype data
+        if "_multi_doctype" in draft_data:
+            multi_data = draft_data["_multi_doctype"]
+            
+            # Set main doctype fields
+            for field, value in draft_data.items():
+                if field != "_multi_doctype" and hasattr(doc, field):
+                    setattr(doc, field, value)
+            
+            # Save main document first
+            doc.insert()
+            
+            # Create dependent documents
+            if "doctypes" in multi_data:
+                for doctype_name, doctype_data in multi_data["doctypes"].items():
+                    if doctype_data:
+                        dependent_doc = frappe.new_doc(doctype_name)
+                        
+                        # Link to main document if there's a reference field
+                        for field in dependent_doc.meta.fields:
+                            if field.fieldtype == "Link" and field.options == draft.target_doctype:
+                                setattr(dependent_doc, field.fieldname, doc.name)
+                                break
+                        
+                        # Set other fields
+                        for field, value in doctype_data.items():
+                            if hasattr(dependent_doc, field):
+                                setattr(dependent_doc, field, value)
+                        
+                        dependent_doc.insert()
+        else:
+            # Single doctype mode
+            for field, value in draft_data.items():
+                if hasattr(doc, field):
+                    setattr(doc, field, value)
+            
+            doc.insert()
+        
+        # Update draft status
+        draft.status = "Completed"
+        draft.save()
         
         return {
             "success": True,
-            "draft_data": draft.get_draft_data_dict(),
-            "conversation": draft.get_conversation_history_list(),
-            "status": draft.status
+            "document_name": doc.name,
+            "doctype": doc.doctype
         }
         
     except Exception as e:
-        frappe.log_error(f"Error getting draft data",f"{str(e)}")
+        frappe.log_error(f"Error creating document from draft: {str(e)}")
         return {"success": False, "error": str(e)}
 
-
 @frappe.whitelist()
-def search_documents(doctype, search_fields, search_term, limit=10):
-    """Search for existing documents to check for duplicates"""
+def update_document_from_draft(draft_id, existing_doc_name):
+    """Update an existing document from a draft"""
     try:
-        if not frappe.db.exists("DocType", doctype):
-            return {"error": "DocType not found"}
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
         
-        # Validate search fields exist in the doctype
-        meta = frappe.get_meta(doctype)
-        valid_fields = [field.fieldname for field in meta.fields if field.fieldtype in ['Data', 'Text', 'Link']]
+        # Parse the draft data
+        draft_data = json.loads(draft.draft_data) if draft.draft_data else {}
         
-        # Filter search_fields to only include valid searchable fields
-        if isinstance(search_fields, str):
-            search_fields = [search_fields]
+        if not draft_data:
+            return {"success": False, "error": "No draft data found"}
         
-        search_fields = [field for field in search_fields if field in valid_fields]
+        # Get the existing document
+        doc = frappe.get_doc(draft.target_doctype, existing_doc_name)
         
-        if not search_fields:
-            return {"error": "No valid search fields provided"}
+        # Update the document fields
+        for field, value in draft_data.items():
+            if field != "_multi_doctype" and hasattr(doc, field):
+                setattr(doc, field, value)
         
-        # Build search filters
-        filters = []
-        for field in search_fields:
-            filters.append([doctype, field, 'like', f'%{search_term}%'])
+        # Save the updated document
+        doc.save()
         
-        # Search for documents
-        results = frappe.get_all(
-            doctype,
-            or_filters=filters,
-            fields=['name'] + search_fields,
-            limit=limit
-        )
+        # Update draft status
+        draft.status = "Completed"
+        draft.save()
         
         return {
             "success": True,
-            "results": results,
-            "count": len(results),
-            "search_term": search_term,
-            "searched_fields": search_fields
+            "document_name": doc.name,
+            "doctype": doc.doctype
         }
         
     except Exception as e:
-        frappe.log_error(f"Error searching documents",f"{str(e)}")
+        frappe.log_error(f"Error updating document from draft: {str(e)}")
         return {"success": False, "error": str(e)}
 
 

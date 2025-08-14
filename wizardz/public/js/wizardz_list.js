@@ -1,155 +1,155 @@
-// Wizardz Widget - Injects AI assistant button into Frappe desk pages
+// Wizardz List View Integration - Adds AI Assistant button to list views
 // Copyright (c) 2025, TierneyMorris Pty Ltd
 
-class WizardzWidget {
-    constructor() {
-        this.currentDoctype = null;
-        this.wizardConfig = null;
-        this.init();
-    }
+frappe.provide('wizardz');
 
-    init() {
-        // Wait for Frappe to be ready
-        if (typeof frappe === 'undefined') {
-            setTimeout(() => this.init(), 100);
-            return;
+// Global wizard configurations cache (shared with form view)
+wizardz.configurations = wizardz.configurations || {};
+
+// Reliable list view integration using the same approach as form views
+$(document).ready(function() {
+    // Wait for Frappe to be available
+    function waitForFrappe() {
+        if (typeof frappe !== 'undefined' && frappe.router) {
+            // Set up list view integration
+            setupListViewIntegration();
+            
+            console.log('Wizardz: List view integration initialized');
+        } else {
+            // Retry after a short delay
+            setTimeout(waitForFrappe, 100);
         }
-
-        // Modify Frappe's page template to inject our button
-        this.injectButtonIntoTemplate();
-
-        // Set up click handler for our button
-        this.setupClickHandler();
-
-        // Listen for page changes to show/hide button
-        if (frappe.router) {
-            frappe.router.on('change', () => {
-                this.updateButtonVisibility();
-            });
-        }
-
-        // Initial check
-        this.updateButtonVisibility();
     }
+    
+    waitForFrappe();
+});
 
-    injectButtonIntoTemplate() {
-        // Try to inject button directly into existing standard-actions
-        this.injectButtonDirectly();
+function setupListViewIntegration() {
+    // Method 1: Use the existing list_view_loaded event (primary method)
+    $(document).on('list_view_loaded', function(e, list_view) {
+        if (!list_view || !list_view.doctype) return;
         
-        // Also modify template as fallback
-        if (frappe.templates && frappe.templates['page']) {
-            frappe.templates['page'] = frappe.templates['page'].replace(
-                /<div class="standard-actions flex">([\s\S]*?)<\/div>/,
-                (match, inner) => {
-                    // Avoid duplicate injection
-                    if (inner.includes('wizardz-ai-button')) return match;
-                    
-                    return `<div class="standard-actions flex">
-                        <button id="wizardz-ai-button" class="btn btn-primary btn-sm" title="AI DocType Assistant" style="margin-right: 8px; display: none;">
-                            <i class="fa fa-magic"></i>
-                        </button>
-                        ${inner}
-                    </div>`;
-                }
-            );
-        }
-    }
-
-    injectButtonDirectly() {
-        // Try to find existing standard-actions and inject button
-        const standardActions = document.querySelector('.standard-actions.flex');
-        if (standardActions && !document.getElementById('wizardz-ai-button')) {
-            const button = document.createElement('button');
-            button.id = 'wizardz-ai-button';
-            button.className = 'btn btn-primary btn-sm';
-            button.title = 'AI DocType Assistant';
-            button.style.cssText = 'margin-right: 8px; display: none;';
-            button.innerHTML = '<i class="fa fa-magic"></i>';
-            
-            // Insert as first child
-            standardActions.insertBefore(button, standardActions.firstChild);
-        }
-    }
-
-    setupClickHandler() {
-        // Set up click handler for our AI button
-        document.addEventListener('click', async (event) => {
-            const button = event.target.closest('#wizardz-ai-button');
-            if (!button) return;
-
-            event.preventDefault();
-            
-            const route = frappe.get_route();
-            const view = route[0];
-            const documentType = route[1];
-            
-            console.log("Wizardz: AI button clicked - View:", view, "DocType:", documentType);
-            
-            // Open the wizard modal
-            if (this.wizardConfig) {
-                const modal = new WizardzModal(this.wizardConfig, documentType);
-                modal.show();
+        console.log(`Wizardz: List view loaded for ${list_view.doctype}`);
+        
+        checkForWizardConfiguration(list_view.doctype, function(hasWizard, config) {
+            if (hasWizard) {
+                addAIAssistantButton(list_view, config);
             }
         });
-    }
-
-    async updateButtonVisibility() {
-        // Re-inject button on every page change to handle DOM changes
-        this.injectButtonDirectly();
-        
-        // Check current page and show/hide button accordingly
-        const route = frappe.get_route();
-        
-        // Add null check for route
-        if (!route || !Array.isArray(route) || route.length < 2) {
-            this.hideButton();
-            return;
-        }
-        
-        if ((route[0] === 'Form' || route[0] === 'List') && route[1]) {
-            this.currentDoctype = route[1];
-            await this.checkForWizard();
-        } else {
-            this.hideButton();
-        }
-    }
-
-    async checkForWizard() {
-        try {
-            // Check if there's a wizard for this doctype
-            const response = await frappe.call({
-                method: 'wizardz.api.get_wizard_for_doctype',
-                args: { doctype: this.currentDoctype }
-            });
-
-            if (response.message) {
-                this.wizardConfig = response.message;
-                this.showButton();
-            } else {
-                this.hideButton();
+    });
+    
+    // Method 2: Periodic check for list views (backup method)
+    let listViewCheckInterval = setInterval(function() {
+        // Check if we're on a list view page
+        if (frappe.get_route && frappe.get_route()[0] === 'List' && frappe.get_route()[1]) {
+            const doctype = frappe.get_route()[1];
+            
+            // Check if list view exists and hasn't been processed
+            if (cur_list && cur_list.doctype === doctype) {
+                // Avoid duplicate processing
+                if (!cur_list.wizardz_processed) {
+                    cur_list.wizardz_processed = true;
+                    
+                    console.log(`Wizardz: Periodic check found ${doctype} list view`);
+                    
+                    checkForWizardConfiguration(doctype, function(hasWizard, config) {
+                        if (hasWizard) {
+                            addAIAssistantButton(cur_list, config);
+                        }
+                    });
+                }
             }
-        } catch (error) {
-            // Silently hide button if no wizard is configured or there's an error
-            this.hideButton();
         }
-    }
+    }, 1000); // Check every second
+    
+    console.log('Wizardz: List view integration setup completed');
+}
 
-    showButton() {
-        const button = document.getElementById('wizardz-ai-button');
-        if (button) {
-            button.style.display = 'inline-block';
-            button.title = `AI DocType Assistant - Create new ${this.currentDoctype}`;
-        }
+function checkForWizardConfiguration(doctype, callback) {
+    // Check cache first
+    if (wizardz.configurations[doctype] !== undefined) {
+        const config = wizardz.configurations[doctype];
+        callback(config !== null, config);
+        return;
     }
-
-    hideButton() {
-        const button = document.getElementById('wizardz-ai-button');
-        if (button) {
-            button.style.display = 'none';
+    
+    // Check for wizard configuration
+    frappe.call({
+        method: 'wizardz.api.get_wizard_for_doctype',
+        args: { doctype: doctype },
+        callback: function(response) {
+            if (response.message) {
+                wizardz.configurations[doctype] = response.message;
+                callback(true, response.message);
+            } else {
+                wizardz.configurations[doctype] = null;
+                callback(false, null);
+            }
+        },
+        error: function() {
+            wizardz.configurations[doctype] = null;
+            callback(false, null);
         }
+    });
+}
+
+function addAIAssistantButton(list_view, wizard_config) {
+    // Check if list_view and required properties exist
+    if (!list_view || !list_view.page || !list_view.page.add_inner_button) {
+        console.log('Wizardz: List view or page object not ready yet');
+        return;
+    }
+    
+    // Check if button already exists
+    if (list_view.page.$wrapper && list_view.page.$wrapper.find('.wizardz-ai-btn').length > 0) {
+        return;
+    }
+    
+    try {
+        // Add AI Assistant button to the list view using a temporary text for detection
+        list_view.page.add_inner_button(__('...'), function() {
+            openWizardModal(wizard_config, list_view.doctype);
+        });
+        
+        // Find and style the button that was just added
+        setTimeout(function() {
+            // Find the button by the temporary text
+            let ai_button = null;
+            
+            // Method 1: Try page wrapper if available
+            if (list_view.page && list_view.page.$wrapper) {
+                ai_button = list_view.page.$wrapper.find('.btn:contains("...")').first();
+            }
+            
+            // Method 2: Try direct jQuery search on document if wrapper method failed
+            if (!ai_button || ai_button.length === 0) {
+                ai_button = $('.btn:contains("...")').first();
+            }
+            
+            if (ai_button && ai_button.length > 0) {
+                // Replace content with only FontAwesome icon
+                ai_button.html('<i class="fa fa-magic"></i>');
+                ai_button.addClass('btn-primary wizardz-ai-btn');
+                ai_button.attr('title', `AI DocType Assistant - Create new ${list_view.doctype}`);
+                
+                console.log(`Wizardz: Added AI Assistant button to ${list_view.doctype} list view`);
+            } else {
+                console.log(`Wizardz: Could not find AI Assistant button to style for ${list_view.doctype}`);
+            }
+        }, 300); // Increased delay to ensure button is fully rendered
+        
+    } catch (error) {
+        console.log(`Wizardz: Error adding button to ${list_view.doctype} list view:`, error);
     }
 }
 
+function openWizardModal(wizard_config, doctype) {
+    // Create and show the wizard modal
+    const modal = new WizardzModal(wizard_config, doctype);
+    modal.show();
+}
+
+// Modal class (reuse from the existing widget)
 class WizardzModal {
     constructor(wizardConfig, doctype) {
         this.wizardConfig = wizardConfig;
@@ -758,18 +758,4 @@ class WizardzModal {
             }
         }
     }
-}
-
-// Initialize the widget when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    new WizardzWidget();
-});
-
-// Also initialize if DOM is already ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        new WizardzWidget();
-    });
-} else {
-    new WizardzWidget();
 }

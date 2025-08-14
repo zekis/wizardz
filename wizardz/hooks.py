@@ -27,8 +27,9 @@ app_license = "mit"
 # include js, css files in header of desk.html
 app_include_css = "/assets/wizardz/css/wizardz_widget.css"
 app_include_js = [
-    "/assets/wizardz/js/wizardz_form.js",  # Form view integration
-    "/assets/wizardz/js/wizardz_list.js"   # List view integration
+    "/assets/wizardz/js/wizardz_utils.js",  # Shared utilities (must load first)
+    "/assets/wizardz/js/wizardz_modal.js",  # Shared modal component
+    "/assets/wizardz/js/wizardz_router.js"  # Combined routing logic for both form and list views
 ]
 
 # include js, css files in header of web template

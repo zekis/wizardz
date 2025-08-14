@@ -60,7 +60,7 @@ def get_wizard_for_doctype(doctype):
 
 
 @frappe.whitelist()
-def start_wizard_session(wizard_config, draft_name, target_doctype):
+def start_wizard_session(wizard_config, draft_name, target_doctype, existing_doc=None, mode="create"):
     """Initialize a new wizard session"""
     # Validate permissions
     wizard_doc = frappe.get_doc("Wizardz Configuration", wizard_config)
@@ -73,22 +73,77 @@ def start_wizard_session(wizard_config, draft_name, target_doctype):
         "draft_name": draft_name,
         "wizard_config": wizard_config,
         "target_doctype": target_doctype,
-        "status": "Draft"
+        "status": "Update Mode" if mode == "update" else "Draft"
     })
+    
+    # If update mode, store the existing document reference and populate draft data
+    if mode == "update" and existing_doc:
+        document_name = None
+        existing_doc_data = None
+        
+        # Handle different formats of existing_doc
+        if isinstance(existing_doc, dict):
+            document_name = existing_doc.get("name")
+            existing_doc_data = existing_doc
+        elif isinstance(existing_doc, str):
+            # Could be a JSON string or just the document name
+            try:
+                # Try to parse as JSON first
+                doc_data = json.loads(existing_doc)
+                if isinstance(doc_data, dict):
+                    document_name = doc_data.get("name")
+                    existing_doc_data = doc_data
+                else:
+                    document_name = existing_doc
+            except (json.JSONDecodeError, ValueError):
+                # Not JSON, treat as document name
+                document_name = existing_doc
+        else:
+            # Fallback - convert to string
+            document_name = str(existing_doc)
+        
+        # Ensure we only store the document name (max 140 chars)
+        if document_name:
+            draft.target_document = str(document_name)[:140]
+            
+            # If we don't have the document data, fetch it from the database
+            if not existing_doc_data:
+                try:
+                    existing_doc_obj = frappe.get_doc(target_doctype, document_name)
+                    existing_doc_data = existing_doc_obj.as_dict()
+                except Exception as e:
+                    frappe.log_error(f"Error fetching existing document for update mode", f"DocType: {target_doctype}, Name: {document_name}, Error: {str(e)}")
+            
+            # Clean and populate draft data with existing document data
+            if existing_doc_data:
+                # Remove system fields that shouldn't be in draft
+                system_fields = ['name', 'owner', 'creation', 'modified', 'modified_by', 'docstatus', 'idx', 'doctype', '__islocal', '__last_sync_on']
+                cleaned_data = {}
+                
+                for field_name, field_value in existing_doc_data.items():
+                    if field_name not in system_fields and field_value is not None:
+                        # Skip empty values and None values, but keep meaningful data
+                        if field_value != "" and field_value != []:
+                            cleaned_data[field_name] = field_value
+                
+                # Populate draft with existing document data
+                draft.update_draft_data(cleaned_data)
+    
     draft.insert()
     
     # Add initial system message
+    action_text = "updating" if mode == "update" else "creating"
     draft.add_message_to_conversation(
         "system",
-        f"Started wizard session for creating DocType: {target_doctype}",
-        {"action": "session_start", "wizard": wizard_config}
+        f"Started wizard session for {action_text} DocType: {target_doctype}",
+        {"action": "session_start", "wizard": wizard_config, "mode": mode}
     )
     draft.save()
     
     return {
         "success": True,
         "draft_id": draft.name,
-        "message": f"Wizard session started for {target_doctype}"
+        "message": f"Wizard session started for {action_text} {target_doctype}"
     }
 
 
@@ -674,7 +729,7 @@ def create_document_from_draft(draft_id):
         }
         
     except Exception as e:
-        frappe.log_error(f"Error creating document from draft: {str(e)}")
+        frappe.log_error(f"Error creating document from draft",f"{str(e)}")
         return {"success": False, "error": str(e)}
 
 @frappe.whitelist()
@@ -711,7 +766,7 @@ def update_document_from_draft(draft_id, existing_doc_name):
         }
         
     except Exception as e:
-        frappe.log_error(f"Error updating document from draft: {str(e)}")
+        frappe.log_error(f"Error updating document from draft",f"{str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -1298,4 +1353,83 @@ def get_draft_data(draft_id):
         
     except Exception as e:
         frappe.log_error(f"Error getting draft data for resumption", f"Draft ID: {draft_id}, Error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def initialize_draft_data(draft_id, initial_data):
+    """Initialize draft data with existing document data for update mode"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+        
+        # Clean the initial data - remove system fields
+        system_fields = ['name', 'owner', 'creation', 'modified', 'modified_by', 'docstatus', 'idx', 'doctype', '__islocal', '__last_sync_on']
+        cleaned_data = {}
+        
+        for field_name, field_value in initial_data.items():
+            if field_name not in system_fields and field_value is not None:
+                # Skip empty values and None values
+                if field_value != "" and field_value != []:
+                    cleaned_data[field_name] = field_value
+        
+        # Update draft with cleaned initial data
+        draft.update_draft_data(cleaned_data)
+        draft.save()
+        
+        return {
+            "success": True,
+            "message": f"Initialized draft with {len(cleaned_data)} fields from existing document",
+            "initialized_fields": list(cleaned_data.keys())
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error initializing draft data", f"Draft ID: {draft_id}, Error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def search_documents(doctype, search_fields, search_term, limit=10):
+    """Search for existing documents to check for duplicates"""
+    try:
+        if not frappe.db.exists("DocType", doctype):
+            return {"success": False, "error": f"DocType '{doctype}' does not exist"}
+        
+        # Build search filters
+        filters = []
+        if search_term and search_fields:
+            for field in search_fields:
+                filters.append([doctype, field, "like", f"%{search_term}%"])
+        
+        # Get documents
+        if filters:
+            # Use OR condition for multiple field search
+            documents = frappe.get_all(
+                doctype,
+                or_filters=filters,
+                fields=["name"] + search_fields,
+                limit=limit
+            )
+        else:
+            # No search term, return recent documents
+            documents = frappe.get_all(
+                doctype,
+                fields=["name"] + (search_fields if search_fields else ["name"]),
+                limit=limit,
+                order_by="modified desc"
+            )
+        
+        return {
+            "success": True,
+            "documents": documents,
+            "count": len(documents),
+            "search_term": search_term,
+            "search_fields": search_fields
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error searching documents", f"DocType: {doctype}, Error: {str(e)}")
         return {"success": False, "error": str(e)}

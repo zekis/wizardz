@@ -1,0 +1,107 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:wizard_name",
+ "creation": "2025-08-14 00:45:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "wizard_name",
+  "target_doctype",
+  "column_break_3",
+  "ai_model",
+  "is_active",
+  "section_break_6",
+  "system_prompt",
+  "field_instructions"
+ ],
+ "fields": [
+  {
+   "fieldname": "wizard_name",
+   "fieldtype": "Data",
+   "label": "Wizard Name",
+   "reqd": 1,
+   "unique": 1,
+   "description": "Unique name for this wizard configuration"
+  },
+  {
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "label": "Target DocType",
+   "options": "DocType",
+   "reqd": 1,
+   "description": "The DocType this wizard will help create/modify"
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ai_model",
+   "fieldtype": "Select",
+   "label": "AI Model",
+   "options": "gpt-5\ngpt-4.1\ngpt-4.1-mini\ngpt-4\ngpt-4-turbo\ngpt-3.5-turbo\ngpt-3.5-turbo-16k",
+   "default": "gpt-4",
+   "reqd": 1,
+   "description": "OpenAI model to use for this wizard"
+  },
+  {
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active",
+   "default": 1,
+   "description": "Enable/disable this wizard"
+  },
+  {
+   "fieldname": "section_break_6",
+   "fieldtype": "Section Break",
+   "label": "AI Configuration"
+  },
+  {
+   "fieldname": "system_prompt",
+   "fieldtype": "Long Text",
+   "label": "System Prompt",
+   "reqd": 1,
+   "description": "Base instructions for the AI agent"
+  },
+  {
+   "fieldname": "field_instructions",
+   "fieldtype": "Long Text",
+   "label": "Field Instructions",
+   "description": "JSON structure with field-specific guidance and context"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-08-14 00:45:00.000000",
+ "modified_by": "Administrator",
+ "module": "Wizardz",
+ "name": "Wizardz Configuration",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Desk User",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

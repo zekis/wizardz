@@ -1,0 +1,123 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "naming_series:",
+ "creation": "2025-08-14 00:51:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "draft_name",
+  "column_break_3",
+  "wizard_config",
+  "target_doctype",
+  "section_break_6",
+  "draft_data",
+  "section_break_8",
+  "conversation_history",
+  "section_break_10",
+  "status"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "WZRD-DRAFT-.YYYY.-",
+   "reqd": 1
+  },
+  {
+   "fieldname": "draft_name",
+   "fieldtype": "Data",
+   "label": "Draft Name",
+   "reqd": 1,
+   "description": "User-friendly name for this draft"
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "wizard_config",
+   "fieldtype": "Link",
+   "label": "Wizard Configuration",
+   "options": "Wizardz Configuration",
+   "reqd": 1
+  },
+  {
+   "fieldname": "target_doctype",
+   "fieldtype": "Data",
+   "label": "Target DocType",
+   "reqd": 1,
+   "description": "The DocType being created/modified"
+  },
+  {
+   "fieldname": "section_break_6",
+   "fieldtype": "Section Break",
+   "label": "Draft Data"
+  },
+  {
+   "fieldname": "draft_data",
+   "fieldtype": "Long Text",
+   "label": "Draft Data",
+   "description": "JSON structure of the draft doctype"
+  },
+  {
+   "fieldname": "section_break_8",
+   "fieldtype": "Section Break",
+   "label": "Conversation"
+  },
+  {
+   "fieldname": "conversation_history",
+   "fieldtype": "Long Text",
+   "label": "Conversation History",
+   "description": "Complete chat history for this draft"
+  },
+  {
+   "fieldname": "section_break_10",
+   "fieldtype": "Section Break",
+   "label": "Status"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nIn Progress\nReady to Deploy\nDeployed\nError",
+   "default": "Draft",
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-08-14 00:51:00.000000",
+ "modified_by": "Administrator",
+ "module": "Wizardz",
+ "name": "Wizardz Draft",
+ "naming_rule": "By Naming Series",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Desk User",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

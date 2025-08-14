@@ -1,0 +1,108 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "naming_series:",
+ "creation": "2025-08-14 00:57:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "wizard_draft",
+  "column_break_3",
+  "message_type",
+  "timestamp",
+  "section_break_6",
+  "message_content",
+  "section_break_8",
+  "metadata"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "WZRD-MSG-.YYYY.-",
+   "reqd": 1
+  },
+  {
+   "fieldname": "wizard_draft",
+   "fieldtype": "Link",
+   "label": "Wizard Draft",
+   "options": "Wizardz Draft",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "message_type",
+   "fieldtype": "Select",
+   "label": "Message Type",
+   "options": "user\nassistant\nsystem\nfunction_call\nfunction_response",
+   "reqd": 1
+  },
+  {
+   "fieldname": "timestamp",
+   "fieldtype": "Datetime",
+   "label": "Timestamp",
+   "reqd": 1,
+   "default": "now"
+  },
+  {
+   "fieldname": "section_break_6",
+   "fieldtype": "Section Break",
+   "label": "Message Content"
+  },
+  {
+   "fieldname": "message_content",
+   "fieldtype": "Long Text",
+   "label": "Message Content",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_8",
+   "fieldtype": "Section Break",
+   "label": "Additional Data"
+  },
+  {
+   "fieldname": "metadata",
+   "fieldtype": "Long Text",
+   "label": "Metadata",
+   "description": "Additional context, function calls, etc. (JSON format)"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-08-14 00:57:00.000000",
+ "modified_by": "Administrator",
+ "module": "Wizardz",
+ "name": "Wizardz Conversation",
+ "naming_rule": "By Naming Series",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Desk User",
+   "write": 1
+  }
+ ],
+ "sort_field": "timestamp",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

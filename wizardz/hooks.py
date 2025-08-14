@@ -25,8 +25,8 @@ app_license = "mit"
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/wizardz/css/wizardz.css"
-# app_include_js = "/assets/wizardz/js/wizardz.js"
+app_include_css = "/assets/wizardz/css/wizardz_widget.css"
+app_include_js = "/assets/wizardz/js/wizardz_widget.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/wizardz/css/wizardz.css"
@@ -241,4 +241,3 @@ app_license = "mit"
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-

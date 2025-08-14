@@ -1,0 +1,124 @@
+{
+ "actions": [],
+ "creation": "2025-08-14 01:33:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "openai_section",
+  "openai_api_key",
+  "default_ai_model",
+  "column_break_4",
+  "max_tokens",
+  "temperature",
+  "section_break_7",
+  "enable_logging",
+  "log_conversations",
+  "column_break_10",
+  "max_conversation_history",
+  "auto_cleanup_days"
+ ],
+ "fields": [
+  {
+   "fieldname": "openai_section",
+   "fieldtype": "Section Break",
+   "label": "OpenAI Configuration"
+  },
+  {
+   "fieldname": "openai_api_key",
+   "fieldtype": "Password",
+   "label": "OpenAI API Key",
+   "reqd": 1,
+   "description": "Your OpenAI API key for AI-powered assistance"
+  },
+  {
+   "fieldname": "default_ai_model",
+   "fieldtype": "Select",
+   "label": "Default AI Model",
+   "options": "gpt-5\ngpt-4.1\ngpt-4.1-mini\ngpt-4\ngpt-4-turbo\ngpt-3.5-turbo\ngpt-3.5-turbo-16k",
+   "default": "gpt-5",
+   "reqd": 1,
+   "description": "Default OpenAI model for new wizard configurations"
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "max_tokens",
+   "fieldtype": "Int",
+   "label": "Max Tokens",
+   "default": 2000,
+   "description": "Maximum tokens for AI responses"
+  },
+  {
+   "fieldname": "temperature",
+   "fieldtype": "Float",
+   "label": "Temperature",
+   "default": 0.7,
+   "description": "AI creativity level (0.0 to 1.0)"
+  },
+  {
+   "fieldname": "section_break_7",
+   "fieldtype": "Section Break",
+   "label": "Logging & History"
+  },
+  {
+   "fieldname": "enable_logging",
+   "fieldtype": "Check",
+   "label": "Enable Detailed Logging",
+   "default": 1,
+   "description": "Log AI interactions for debugging"
+  },
+  {
+   "fieldname": "log_conversations",
+   "fieldtype": "Check",
+   "label": "Log All Conversations",
+   "default": 1,
+   "description": "Store detailed conversation logs"
+  },
+  {
+   "fieldname": "column_break_10",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "max_conversation_history",
+   "fieldtype": "Int",
+   "label": "Max Conversation History",
+   "default": 50,
+   "description": "Maximum messages to keep in conversation context"
+  },
+  {
+   "fieldname": "auto_cleanup_days",
+   "fieldtype": "Int",
+   "label": "Auto Cleanup (Days)",
+   "default": 30,
+   "description": "Automatically delete old conversations after X days (0 = disabled)"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2025-08-14 01:33:00.000000",
+ "modified_by": "Administrator",
+ "module": "Wizardz",
+ "name": "Wizardz Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

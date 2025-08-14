@@ -2,7 +2,7 @@
  "actions": [],
  "allow_rename": 1,
  "autoname": "field:wizard_name",
- "creation": "2025-08-14 00:45:00.000000",
+ "creation": "2025-08-14 00:45:00",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -17,40 +17,50 @@
  ],
  "fields": [
   {
+   "description": "Unique name for this wizard configuration",
    "fieldname": "wizard_name",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Wizard Name",
    "reqd": 1,
-   "unique": 1,
-   "description": "Unique name for this wizard configuration"
+   "unique": 1
   },
   {
+   "description": "The DocType this wizard will help create/modify",
    "fieldname": "target_doctype",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Target DocType",
    "options": "DocType",
-   "reqd": 1,
-   "description": "The DocType this wizard will help create/modify"
+   "reqd": 1
   },
   {
    "fieldname": "column_break_3",
    "fieldtype": "Column Break"
   },
   {
+   "default": "gpt-4",
+   "description": "OpenAI model to use for this wizard",
    "fieldname": "ai_model",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "AI Model",
    "options": "gpt-5\ngpt-4.1\ngpt-4.1-mini\ngpt-4\ngpt-4-turbo\ngpt-3.5-turbo\ngpt-3.5-turbo-16k",
-   "default": "gpt-4",
-   "reqd": 1,
-   "description": "OpenAI model to use for this wizard"
+   "reqd": 1
   },
   {
+   "default": 1,
+   "description": "Enable or disable this wizard",
    "fieldname": "is_active",
    "fieldtype": "Check",
-   "label": "Is Active",
-   "default": 1,
-   "description": "Enable/disable this wizard"
+   "in_list_view": 1,
+   "label": "Is Active"
+  },
+  {
+   "fieldname": "system_prompt",
+   "fieldtype": "Long Text",
+   "label": "System Prompt",
+   "description": "Optional additional instructions for the AI assistant. The system automatically generates a comprehensive base prompt."
   },
   {
    "fieldname": "section_break_6",
@@ -58,22 +68,15 @@
    "label": "AI Configuration"
   },
   {
-   "fieldname": "system_prompt",
-   "fieldtype": "Long Text",
-   "label": "System Prompt",
-   "reqd": 1,
-   "description": "Base instructions for the AI agent"
-  },
-  {
+   "description": "JSON structure with field-specific guidance and context",
    "fieldname": "field_instructions",
    "fieldtype": "Long Text",
-   "label": "Field Instructions",
-   "description": "JSON structure with field-specific guidance and context"
+   "label": "Field Instructions"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-14 00:45:00.000000",
+ "modified": "2025-08-14 13:10:18.437061",
  "modified_by": "Administrator",
  "module": "Wizardz",
  "name": "Wizardz Configuration",

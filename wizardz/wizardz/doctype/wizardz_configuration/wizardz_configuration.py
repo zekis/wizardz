@@ -10,7 +10,6 @@ class WizardzConfiguration(Document):
     def validate(self):
         """Validate the wizard configuration"""
         self.validate_field_instructions()
-        self.validate_system_prompt()
     
     def validate_field_instructions(self):
         """Validate that field_instructions is valid JSON if provided"""
@@ -19,11 +18,6 @@ class WizardzConfiguration(Document):
                 json.loads(self.field_instructions)
             except json.JSONDecodeError:
                 frappe.throw("Field Instructions must be valid JSON")
-    
-    def validate_system_prompt(self):
-        """Validate system prompt requirements"""
-        if not self.system_prompt or len(self.system_prompt.strip()) < 10:
-            frappe.throw("System Prompt must be at least 10 characters long")
     
     def get_field_instructions_dict(self):
         """Return field instructions as a dictionary"""

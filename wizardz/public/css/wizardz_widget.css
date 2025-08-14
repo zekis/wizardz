@@ -80,7 +80,7 @@
 
 .chat-messages {
     background: #f8f9fa;
-    max-height: 400px;
+    /* Remove max-height to allow flexbox to control height */
 }
 
 .message {

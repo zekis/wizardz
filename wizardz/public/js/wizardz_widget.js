@@ -205,37 +205,34 @@ class WizardzModal {
                                 <!-- Preview Panel (Left) -->
                                 <div class="col-md-6" style="height: 100%; border-right: 1px solid #d1d8dd; padding: 0;">
                                     <div class="wizardz-preview-panel" style="height: 100%; display: flex; flex-direction: column; background: white;">
-                                        <div class="preview-header" style="padding: 15px; border-bottom: 1px solid #d1d8dd; background: white;">
-                                            <h5 style="margin: 0; color: #36414c; font-weight: 500;">Customer Form Preview</h5>
-                                            <small style="color: #6c7680;">Live preview of your ${this.doctype} record</small>
+                                        <div class="preview-header" style="padding: 15px !important; border-bottom: 1px solid #d1d8dd !important; background: white !important; background-color: white !important;">
+                                            <h5 style="margin: 0 !important; color: #36414c !important; font-weight: 500 !important; background: transparent !important;">${this.doctype} Form Preview</h5>
+                                            <small style="color: #6c7680 !important; background: transparent !important;">Live preview of your ${this.doctype} record</small>
                                         </div>
                                         <div class="preview-content" style="flex: 1; overflow-y: auto; padding: 15px; background: white;">
                                             <div class="preview-placeholder text-center" style="padding: 50px; color: #6c7680;">
-                                                <i class="fa fa-user fa-3x" style="color: #d1d8dd; margin-bottom: 15px;"></i>
-                                                <p>Customer record preview will appear here as you provide information</p>
+                                                <i class="fa fa-file-text-o fa-3x" style="color: #d1d8dd; margin-bottom: 15px;"></i>
+                                                <p>${this.doctype} record preview will appear here as you provide information</p>
                                             </div>
                                         </div>
                                         <div class="preview-actions" style="padding: 15px; border-top: 1px solid #d1d8dd; background: white;">
-                                            <button class="btn btn-success btn-sm" id="wizardz-deploy-btn" disabled
+                                            <button class="btn btn-success btn-sm" id="wizardz-create-document-btn" disabled
                                                     style="margin-right: 10px;">
-                                                <i class="fa fa-save"></i> Save Customer
+                                                <i class="fa fa-save"></i> Create ${this.doctype}
                                             </button>
-                                            <button class="btn btn-default btn-sm" id="wizardz-save-draft-btn" disabled
-                                                    style="border: 1px solid #d1d8dd; color: #36414c;">
-                                                <i class="fa fa-edit"></i> Save Draft
-                                            </button>
+                                            <small style="color: #6c7680; font-style: italic;">Draft is saved automatically as you provide information</small>
                                         </div>
                                     </div>
                                 </div>
                                 
                                 <!-- Chat Panel (Right) -->
-                                <div class="col-md-6" style="height: 100%; padding: 0;">
-                                    <div class="wizardz-chat-panel" style="height: 100%; display: flex; flex-direction: column; background: white;">
-                                        <div class="chat-header" style="padding: 15px; border-bottom: 1px solid #d1d8dd; background: white;">
-                                            <h5 style="margin: 0; color: #36414c; font-weight: 500;">Chat with AI Assistant</h5>
-                                            <small style="color: #6c7680;">Creating new ${this.doctype} record</small>
+                                <div class="col-md-6" style="height: 100%; padding: 0; display: flex;">
+                                    <div class="wizardz-chat-panel" style="width: 100%; height: 100%; display: flex; flex-direction: column; background: white;">
+                                        <div class="chat-header" style="padding: 15px !important; border-bottom: 1px solid #d1d8dd !important; background: white !important; background-color: white !important;">
+                                            <h5 style="margin: 0 !important; color: #36414c !important; font-weight: 500 !important; background: transparent !important;">Chat with AI Assistant</h5>
+                                            <small style="color: #6c7680 !important; background: transparent !important;">Creating new ${this.doctype} record</small>
                                         </div>
-                                        <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: white;">
+                                        <div class="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: white; min-height: 0;">
                                             <div class="loading-message" style="color: #6c7680;">
                                                 <i class="fa fa-spinner fa-spin"></i> Starting wizard session...
                                             </div>
@@ -281,14 +278,9 @@ class WizardzModal {
             this.sendMessage();
         });
 
-        // Deploy button
-        document.getElementById('wizardz-deploy-btn').addEventListener('click', () => {
-            this.deployDocType();
-        });
-
-        // Save draft button
-        document.getElementById('wizardz-save-draft-btn').addEventListener('click', () => {
-            this.saveDraft();
+        // Create Document button
+        document.getElementById('wizardz-create-document-btn').addEventListener('click', () => {
+            this.createDocument();
         });
     }
 
@@ -370,6 +362,9 @@ class WizardzModal {
                     this.updatePreview(response.message.draft_data);
                 }
                 
+                // Update button text based on draft status
+                this.updateButtonForMode(response.message.draft_status);
+                
                 // Update preview if draft status changed
                 if (response.message.draft_status === 'Ready to Deploy') {
                     this.enableDeployButton();
@@ -421,9 +416,20 @@ class WizardzModal {
     }
 
     enableInput() {
-        document.getElementById('wizardz-message-input').disabled = false;
-        document.getElementById('wizardz-send-btn').disabled = false;
-        document.getElementById('wizardz-save-draft-btn').disabled = false;
+        const messageInput = document.getElementById('wizardz-message-input');
+        const sendBtn = document.getElementById('wizardz-send-btn');
+        
+        messageInput.disabled = false;
+        sendBtn.disabled = false;
+        
+        // Auto-focus the input field for better UX
+        messageInput.focus();
+        
+        // Enable create document button if it exists
+        const createBtn = document.getElementById('wizardz-create-document-btn');
+        if (createBtn) {
+            createBtn.disabled = false;
+        }
     }
 
     disableInput() {
@@ -435,6 +441,22 @@ class WizardzModal {
         document.getElementById('wizardz-deploy-btn').disabled = false;
     }
 
+    updateButtonForMode(draftStatus) {
+        const button = document.getElementById('wizardz-create-document-btn');
+        if (!button) return;
+
+        // Update button text and style based on draft status
+        if (draftStatus === 'Update Mode') {
+            button.innerHTML = `<i class="fa fa-edit"></i> Update ${this.doctype}`;
+            button.className = 'btn btn-warning btn-sm';
+            button.style.marginRight = '10px';
+        } else {
+            button.innerHTML = `<i class="fa fa-save"></i> Create ${this.doctype}`;
+            button.className = 'btn btn-success btn-sm';
+            button.style.marginRight = '10px';
+        }
+    }
+
     updatePreview(draftData) {
         const previewContent = document.querySelector('.preview-content');
         
@@ -442,16 +464,16 @@ class WizardzModal {
             // Show placeholder if no data
             previewContent.innerHTML = `
                 <div class="preview-placeholder text-center" style="padding: 50px; color: #6c7680;">
-                    <i class="fa fa-user fa-3x" style="color: #d1d8dd; margin-bottom: 15px;"></i>
-                    <p>Customer record preview will appear here as you provide information</p>
+                    <i class="fa fa-file-text-o fa-3x" style="color: #d1d8dd; margin-bottom: 15px;"></i>
+                    <p>${this.doctype} record preview will appear here as you provide information</p>
                 </div>
             `;
             return;
         }
 
         // Build preview HTML
-        let previewHtml = '<div class="customer-preview">';
-        previewHtml += '<h6 style="color: #36414c; margin-bottom: 15px; border-bottom: 1px solid #d1d8dd; padding-bottom: 5px;">Customer Record</h6>';
+        let previewHtml = `<div class="${this.doctype.toLowerCase()}-preview">`;
+        previewHtml += `<h6 style="color: #36414c; margin-bottom: 15px; border-bottom: 1px solid #d1d8dd; padding-bottom: 5px;">${this.doctype} Record</h6>`;
         
         // Display each field that has data
         for (const [fieldName, value] of Object.entries(draftData)) {
@@ -483,44 +505,60 @@ class WizardzModal {
         return div.innerHTML;
     }
 
-    async deployDocType() {
+    async createDocument() {
         if (!this.draftId) return;
 
+        // Disable button and show loading
+        const button = document.getElementById('wizardz-create-document-btn');
+        button.disabled = true;
+        button.innerHTML = `<i class="fa fa-spinner fa-spin"></i> Creating ${this.doctype}...`;
+
         try {
-            const draft = await frappe.get_doc('Wizardz Draft', this.draftId);
             const response = await frappe.call({
-                method: 'deploy_doctype',
-                doc: draft
+                method: 'wizardz.api.create_document_from_draft',
+                args: {
+                    draft_id: this.draftId
+                }
             });
 
             if (response.message.success) {
-                this.addMessage('system', `✅ ${response.message.message}`);
+                this.addMessage('system', `✅ ${this.doctype} created successfully: ${response.message.document_name}`);
                 frappe.show_alert({
-                    message: `DocType '${this.doctype}' deployed successfully!`,
+                    message: `${this.doctype} '${response.message.document_name}' created successfully!`,
                     indicator: 'green'
                 });
-                setTimeout(() => this.close(), 2000);
+                
+                // Navigate to the created document
+                setTimeout(() => {
+                    frappe.set_route('Form', this.doctype, response.message.document_name);
+                    this.close();
+                }, 2000);
             } else {
-                this.addMessage('system', '❌ Error deploying DocType: ' + response.message.error);
+                // Show validation errors in chat first
+                this.addMessage('system', `❌ Validation errors found:\n${response.message.error}`);
+                this.addMessage('system', '🤖 Sending errors to AI for correction...');
+                
+                const aiResponse = await frappe.call({
+                    method: 'wizardz.api.send_message',
+                    args: {
+                        draft_id: this.draftId,
+                        message: `Document creation failed with validation errors: ${response.message.error}. Please fix these issues and ask the user for any missing required information.`,
+                        message_type: "system"
+                    }
+                });
+
+                if (aiResponse.message.success) {
+                    this.addMessage('assistant', aiResponse.message.response);
+                } else {
+                    this.addMessage('system', '❌ Error getting AI correction: ' + aiResponse.message.error);
+                }
             }
         } catch (error) {
-            this.addMessage('system', '❌ Error deploying DocType: ' + error.message);
-        }
-    }
-
-    async saveDraft() {
-        if (!this.draftId) return;
-
-        try {
-            frappe.show_alert({
-                message: 'Draft saved successfully!',
-                indicator: 'blue'
-            });
-        } catch (error) {
-            frappe.show_alert({
-                message: 'Error saving draft: ' + error.message,
-                indicator: 'red'
-            });
+            this.addMessage('system', `❌ Error creating ${this.doctype}: ` + error.message);
+        } finally {
+            // Re-enable button
+            button.disabled = false;
+            button.innerHTML = `<i class="fa fa-save"></i> Create ${this.doctype}`;
         }
     }
 

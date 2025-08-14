@@ -11,6 +11,7 @@
   "column_break_3",
   "wizard_config",
   "target_doctype",
+  "target_document",
   "section_break_6",
   "draft_data",
   "section_break_8",
@@ -52,6 +53,12 @@
    "description": "The DocType being created/modified"
   },
   {
+   "fieldname": "target_document",
+   "fieldtype": "Data",
+   "label": "Target Document",
+   "description": "Name of existing document when in update mode"
+  },
+  {
    "fieldname": "section_break_6",
    "fieldtype": "Section Break",
    "label": "Draft Data"
@@ -82,7 +89,7 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "label": "Status",
-   "options": "Draft\nIn Progress\nReady to Deploy\nDeployed\nError",
+   "options": "Draft\nIn Progress\nUpdate Mode\nReady to Deploy\nCompleted\nError",
    "default": "Draft",
    "reqd": 1
   }

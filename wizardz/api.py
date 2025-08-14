@@ -103,12 +103,18 @@ def send_message(draft_id, message, message_type="user"):
         if not wizard_config.has_permission_for_user():
             frappe.throw(_("You don't have permission to use this wizard"))
         
+        # Reload draft to avoid modification conflicts
+        draft.reload()
+        
         # Add user message to conversation
         draft.add_message_to_conversation(message_type, message)
         draft.save()
         
         # Get AI response (this handles the tool execution loop)
         ai_response = get_ai_response(draft, wizard_config, message)
+        
+        # Reload again before adding AI response
+        draft.reload()
         
         # Add AI response to conversation (this should be the final user-facing message)
         draft.add_message_to_conversation("assistant", ai_response)
@@ -122,7 +128,7 @@ def send_message(draft_id, message, message_type="user"):
         }
         
     except Exception as e:
-        frappe.log_error(f"Error in send_message: {str(e)}")
+        frappe.log_error(f"Error in send_message",f"{str(e)}")
         return {
             "success": False,
             "error": str(e)
@@ -184,14 +190,24 @@ def get_ai_response(draft, wizard_config, user_message):
         return "Maximum tool execution iterations reached. Please try again."
         
     except Exception as e:
-        frappe.log_error(f"Error getting AI response: {str(e)}")
+        frappe.log_error(f"Error getting AI response",f"{str(e)}")
         return f"Error getting AI response: {str(e)}"
 
 
 def build_base_messages(draft, wizard_config):
     """Build base messages for AI conversation"""
     conversation = draft.get_conversation_history_list()
-    messages = [{"role": "system", "content": wizard_config.system_prompt}]
+    
+    # Generate dynamic system prompt
+    base_system_prompt = generate_base_system_prompt(draft.target_doctype)
+    messages = [{"role": "system", "content": base_system_prompt}]
+    
+    # Add wizard-specific instructions if provided
+    if wizard_config.system_prompt and wizard_config.system_prompt.strip():
+        messages.append({
+            "role": "system",
+            "content": f"Additional Instructions: {wizard_config.system_prompt}"
+        })
     
     # Add context about target doctype schema
     doctype_context = get_doctype_context(draft.target_doctype)
@@ -208,38 +224,54 @@ def build_base_messages(draft, wizard_config):
                 "name": "ask_user",
                 "description": "Ask the user a question - REQUIRED for all user interactions",
                 "parameters": "draft_id (string), question (string), context (optional string)",
-                "example": "ask_user(draft_id, 'What is the customer name?', 'collecting_basic_info')"
+                "example": "{\"tool\": \"ask_user\", \"parameters\": {\"draft_id\": \"DRAFT-001\", \"question\": \"What is the customer name?\", \"context\": \"collecting_basic_info\"}}"
             },
             {
-                "name": "save_draft_data",
-                "description": "Save the current customer record data to draft",
-                "parameters": "draft_data (object with field values)"
+                "name": "update_draft_field",
+                "description": "Update or add a specific field in the draft data",
+                "parameters": "field_name (string), field_value (any), action (optional: 'add', 'update', 'remove')",
+                "example": "{\"tool\": \"update_draft_field\", \"parameters\": {\"field_name\": \"customer_name\", \"field_value\": \"Test Customer 2\", \"action\": \"add\"}}"
+            },
+            {
+                "name": "update_multiple_fields",
+                "description": "Update multiple specific fields in the draft data without overwriting existing data",
+                "parameters": "field_updates (object with field names and values)",
+                "example": "{\"tool\": \"update_multiple_fields\", \"parameters\": {\"field_updates\": {\"customer_name\": \"Test Customer 2\", \"customer_type\": \"Company\"}}}"
             },
             {
                 "name": "get_draft_data", 
                 "description": "Retrieve current draft data",
-                "parameters": "draft_id"
+                "parameters": "draft_id",
+                "example": "{\"tool\": \"get_draft_data\", \"parameters\": {\"draft_id\": \"DRAFT-001\"}}"
             },
             {
                 "name": "get_doctype_schema",
                 "description": "Get detailed schema information for any DocType",
-                "parameters": "doctype_name"
+                "parameters": "doctype_name",
+                "example": "{\"tool\": \"get_doctype_schema\", \"parameters\": {\"doctype_name\": \"Customer\"}}"
             },
             {
                 "name": "search_documents",
                 "description": "Search for existing documents to check for duplicates before creating new ones",
                 "parameters": "doctype (string), search_fields (array of field names), search_term (string), limit (optional, default 10)",
-                "example": "search_documents('Customer', ['customer_name', 'email_id'], 'EAC Systems', 5)"
+                "example": "{\"tool\": \"search_documents\", \"parameters\": {\"doctype\": \"Customer\", \"search_fields\": [\"customer_name\", \"email_id\"], \"search_term\": \"EAC Systems\", \"limit\": 5}}"
+            },
+            {
+                "name": "set_update_mode",
+                "description": "Switch wizard from create mode to update mode for an existing document",
+                "parameters": "document_name (string), reason (optional string explaining why switching to update)",
+                "example": "{\"tool\": \"set_update_mode\", \"parameters\": {\"document_name\": \"Bob Smith\", \"reason\": \"Customer already exists, user wants to update\"}}"
             }
         ],
         "critical_rules": [
             "You MUST use a tool in every response - no exceptions",
             "To ask questions, use ask_user tool",
             "To search for duplicates, use search_documents tool", 
-            "To save data, use save_draft_data tool",
+            "To save data, use update_draft_field or update_multiple_fields tools ONLY",
+            "When you have sufficient information, tell the user to click the 'Create [DocType]' or 'Update [DocType]' button to finalize the document",
             "Never respond without using a tool"
         ],
-        "instructions": "MANDATORY: Every response must include a tool call. Use ask_user to ask questions, search_documents to check duplicates, save_draft_data to save information. Never provide a response without calling a tool."
+        "instructions": "MANDATORY: Every response must be valid JSON with a tool call. Use this exact format: {\"tool\": \"ask_user\", \"parameters\": {\"draft_id\": \"...\", \"question\": \"...\"}}. Never provide plain text responses."
     }
     messages.append({
         "role": "system",
@@ -254,116 +286,157 @@ def build_base_messages(draft, wizard_config):
             "content": f"Optional Field Guidance: {json.dumps(field_instructions, indent=2, cls=DateTimeEncoder)}"
         })
     
-    # Add conversation history
-    for msg in conversation[-10:]:  # Last 10 messages for context
+    # Add current draft data so AI knows what's already been saved
+    current_draft_data = draft.get_draft_data_dict()
+    messages.append({
+        "role": "system",
+        "content": f"Current Draft Data: {json.dumps(current_draft_data, indent=2, cls=DateTimeEncoder)}"
+    })
+    
+    # Add conversation history - send ALL messages to maintain context
+    for msg in conversation:  # Send full conversation history
         role = "user" if msg["type"] == "user" else "assistant"
         messages.append({"role": role, "content": msg["content"]})
     
     return messages
 
 
+def generate_base_system_prompt(target_doctype):
+    """Generate the base system prompt dynamically"""
+    return f"""You are an AI assistant specialized in helping users create and update {target_doctype} records in Frappe/ERPNext systems. You have access to the actual {target_doctype} DocType schema with field metadata and tools to manage draft data.
+
+## Your Role & Capabilities:
+- Access to the complete {target_doctype} DocType schema including field metadata
+- Tools to save and retrieve draft data incrementally
+- Understanding of field dependencies and validation requirements
+- Knowledge of linked DocTypes that may need to be created first
+- Ability to switch between create and update modes
+
+## Process Approach:
+1. **Analyze Schema**: Use the provided {target_doctype} DocType schema to understand required fields and dependencies
+2. **Check for Existing Records**: ALWAYS use search_documents to check if records already exist before proceeding
+3. **Handle Duplicates**: If duplicates found, ask user whether to update existing or create new record
+4. **Identify Prerequisites**: Check if any linked DocTypes need to be created first
+5. **Collect Data Systematically**: Ask for information based on field requirements and dependencies
+6. **Save Incrementally**: Use update_draft_field or update_multiple_fields tools to save information as you collect it
+7. **Validate Data**: Ensure collected data meets field requirements before saving
+8. **Handle Links**: Guide user through creating linked records if needed
+9. **Complete Process**: When you have sufficient information, tell the user to click the "Create {target_doctype}" or "Update {target_doctype}" button to finalize the document
+
+## Data Collection Strategy:
+- Start with mandatory fields first
+- Ask one question at a time to avoid overwhelming the user
+- Use the schema to provide appropriate field options and validation
+- Save data to draft after collecting each piece of information
+- Provide helpful context based on field descriptions from schema
+
+## Communication Style:
+- Be conversational and helpful in your questions
+- Reference actual field names and requirements from the schema
+- Explain why information is needed
+- Provide clear guidance on next steps
+- Tell users when they're ready to finalize the document
+- Always provide examples when asking for information to help users understand what's expected
+- Use specific, relevant examples based on the field type and context
+
+## Critical Requirements:
+- EVERY response MUST be valid JSON with a tool call - no exceptions
+- Use ask_user tool for ALL questions to the user
+- Use search_documents before creating any new records to check for duplicates
+- Use update_draft_field or update_multiple_fields after collecting each piece of information
+- When duplicates are found, offer to switch to update mode using set_update_mode
+- Never respond with plain text - always use JSON tool format
+
+Start by greeting the user and asking for the primary information needed to create or update the {target_doctype} record."""
+
+
 def parse_and_execute_tools(ai_response, draft_id):
-    """Parse AI response for tool calls and execute them"""
-    import re
-    
+    """Parse AI response for JSON tool calls and execute them"""
     result = {
         "has_tools": False,
         "results": {},
         "user_message": None
     }
     
-    # Look for tool calls in the format: tool_name(parameters)
-    tool_patterns = [
-        r'ask_user\s*\(\s*draft_id\s*=\s*["\']([^"\']*)["\'],\s*question\s*=\s*["\']([^"\']*)["\'](?:,\s*context\s*=\s*["\']([^"\']*)["\'])?\s*\)',
-        r'search_documents\s*\(\s*doctype\s*=\s*["\']([^"\']*)["\'],\s*search_fields\s*=\s*\[([^\]]*)\],\s*search_term\s*=\s*["\']([^"\']*)["\'](?:,\s*limit\s*=\s*(\d+))?\s*\)',
-        r'save_draft_data\s*\(\s*draft_id\s*=\s*["\']([^"\']*)["\'],\s*draft_data\s*=\s*(\{[^}]*\})\s*\)',
-        r'get_draft_data\s*\(\s*draft_id\s*=\s*["\']([^"\']*)["\']\s*\)',
-        r'get_doctype_schema\s*\(\s*doctype_name\s*=\s*["\']([^"\']*)["\']\s*\)'
-    ]
-    
-    # Check for ask_user
-    ask_user_match = re.search(tool_patterns[0], ai_response)
-    if ask_user_match:
-        result["has_tools"] = True
-        question = ask_user_match.group(2)
-        context = ask_user_match.group(3) if ask_user_match.group(3) else None
+    try:
+        # Try to parse as JSON
+        tool_call = json.loads(ai_response.strip())
         
-        tool_result = ask_user(draft_id, question, context)
-        result["results"]["ask_user"] = tool_result
-        result["user_message"] = question  # Return question to frontend
-    # If no tools were found, return correction message to AI
-    correction_message = f"""
-TOOL CALL FORMAT ERROR: Your response did not contain a properly formatted tool call.
-
-Your response was: {ai_response[:200]}...
-
-You MUST use one of these exact formats:
-
-1. ask_user(draft_id="{draft_id}", question="Your question here")
-2. search_documents(doctype="Customer", search_fields=["customer_name"], search_term="search term")
-3. save_draft_data(draft_id="{draft_id}", draft_data={{"field": "value"}})
-4. get_draft_data(draft_id="{draft_id}")
-5. get_doctype_schema(doctype_name="Customer")
-
-Examples:
-- ask_user(draft_id="{draft_id}", question="What is the customer name?")
-- search_documents(doctype="Customer", search_fields=["customer_name", "email_id"], search_term="EAC Systems")
-- save_draft_data(draft_id="{draft_id}", draft_data={{"customer_name": "EAC Systems", "customer_type": "Company"}})
-
-Please provide your response again using the correct tool call format.
-"""
-    
-    result["has_tools"] = True
-    result["correction_needed"] = True
-    result["correction_message"] = correction_message
-    return result
-    
-    # Check for search_documents
-    search_match = re.search(tool_patterns[1], ai_response)
-    if search_match:
-        result["has_tools"] = True
-        doctype = search_match.group(1)
-        search_fields_str = search_match.group(2)
-        search_term = search_match.group(3)
-        limit = int(search_match.group(4)) if search_match.group(4) else 10
+        if not isinstance(tool_call, dict) or "tool" not in tool_call:
+            raise ValueError("Invalid tool call format")
         
-        # Parse search_fields array
-        search_fields = [field.strip().strip('"\'') for field in search_fields_str.split(',')]
+        tool_name = tool_call["tool"]
+        parameters = tool_call.get("parameters", {})
         
-        tool_result = search_documents(doctype, search_fields, search_term, limit)
-        result["results"]["search_documents"] = tool_result
-        return result
-    
-    # Check for save_draft_data
-    save_match = re.search(tool_patterns[2], ai_response)
-    if save_match:
         result["has_tools"] = True
-        try:
-            draft_data = json.loads(save_match.group(2))
-            tool_result = save_draft_data(draft_id, draft_data)
-            result["results"]["save_draft_data"] = tool_result
-        except json.JSONDecodeError:
-            result["results"]["save_draft_data"] = {"success": False, "error": "Invalid JSON in draft_data"}
+        
+        # Execute the appropriate tool
+        if tool_name == "ask_user":
+            question = parameters.get("question", "")
+            context = parameters.get("context")
+            
+            tool_result = ask_user(draft_id, question, context)
+            result["results"]["ask_user"] = tool_result
+            result["user_message"] = question  # Return question to frontend
+            return result
+            
+        elif tool_name == "search_documents":
+            doctype = parameters.get("doctype", "")
+            search_fields = parameters.get("search_fields", [])
+            search_term = parameters.get("search_term", "")
+            limit = parameters.get("limit", 10)
+            
+            tool_result = search_documents(doctype, search_fields, search_term, limit)
+            result["results"]["search_documents"] = tool_result
+            return result
+            
+        elif tool_name == "update_draft_field":
+            field_name = parameters.get("field_name", "")
+            field_value = parameters.get("field_value", "")
+            action = parameters.get("action", "update")
+            
+            tool_result = update_draft_field(draft_id, field_name, field_value, action)
+            result["results"]["update_draft_field"] = tool_result
+            return result
+            
+        elif tool_name == "update_multiple_fields":
+            field_updates = parameters.get("field_updates", {})
+            
+            tool_result = update_multiple_fields(draft_id, field_updates)
+            result["results"]["update_multiple_fields"] = tool_result
+            return result
+            
+            
+        elif tool_name == "get_draft_data":
+            tool_result = get_draft_data(draft_id)
+            result["results"]["get_draft_data"] = tool_result
+            return result
+            
+        elif tool_name == "get_doctype_schema":
+            doctype_name = parameters.get("doctype_name", "")
+            
+            tool_result = get_doctype_schema(doctype_name)
+            result["results"]["get_doctype_schema"] = tool_result
+            return result
+            
+        elif tool_name == "set_update_mode":
+            document_name = parameters.get("document_name", "")
+            reason = parameters.get("reason", "")
+            
+            tool_result = set_update_mode(draft_id, document_name, reason)
+            result["results"]["set_update_mode"] = tool_result
+            return result
+            
+        else:
+            raise ValueError(f"Unknown tool: {tool_name}")
+            
+    except (json.JSONDecodeError, ValueError, KeyError) as e:
+        # If JSON parsing fails, return as no tools found so the loop exits
+        frappe.log_error(f"JSON parsing failed for AI response",f"{ai_response[:200]}... Error: {str(e)}")
+        
+        # Return has_tools = False to exit the loop and return the raw response
+        result["has_tools"] = False
         return result
-    
-    # Check for get_draft_data
-    get_draft_match = re.search(tool_patterns[3], ai_response)
-    if get_draft_match:
-        result["has_tools"] = True
-        tool_result = get_draft_data(draft_id)
-        result["results"]["get_draft_data"] = tool_result
-        return result
-    
-    # Check for get_doctype_schema
-    schema_match = re.search(tool_patterns[4], ai_response)
-    if schema_match:
-        result["has_tools"] = True
-        doctype_name = schema_match.group(1)
-        tool_result = get_doctype_schema(doctype_name)
-        result["results"]["get_doctype_schema"] = tool_result
-        return result
-    
-    return result
 
 
 @frappe.whitelist()
@@ -399,7 +472,7 @@ def get_doctype_schema(doctype):
         return schema
         
     except Exception as e:
-        frappe.log_error(f"Error getting doctype schema: {str(e)}")
+        frappe.log_error(f"Error getting doctype schema",f"{str(e)}")
         return {"error": str(e)}
 
 
@@ -427,7 +500,7 @@ def save_draft_data(draft_id, draft_data):
         return {"success": True, "message": "Draft data saved"}
         
     except Exception as e:
-        frappe.log_error(f"Error saving draft data: {str(e)}")
+        frappe.log_error(f"Error saving draft data",f"{str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -449,7 +522,7 @@ def get_draft_data(draft_id):
         }
         
     except Exception as e:
-        frappe.log_error(f"Error getting draft data: {str(e)}")
+        frappe.log_error(f"Error getting draft data",f"{str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -495,7 +568,7 @@ def search_documents(doctype, search_fields, search_term, limit=10):
         }
         
     except Exception as e:
-        frappe.log_error(f"Error searching documents: {str(e)}")
+        frappe.log_error(f"Error searching documents",f"{str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -503,7 +576,10 @@ def search_documents(doctype, search_fields, search_term, limit=10):
 def ask_user(draft_id, question, context=None):
     """Tool for AI to ask user a question - forces tool usage"""
     try:
+        # Reload draft to avoid modification conflicts
         draft = frappe.get_doc("Wizardz Draft", draft_id)
+        draft.reload()
+        
         wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
         
         if not wizard_config.has_permission_for_user():
@@ -512,7 +588,9 @@ def ask_user(draft_id, question, context=None):
         # Log the question as metadata
         metadata = {"action": "ask_user", "context": context} if context else {"action": "ask_user"}
         draft.add_message_to_conversation("system", f"AI asked: {question}", metadata)
-        draft.save()
+        
+        # Use db_set to avoid modification conflicts
+        frappe.db.commit()
         
         return {
             "success": True,
@@ -521,7 +599,364 @@ def ask_user(draft_id, question, context=None):
         }
         
     except Exception as e:
-        frappe.log_error(f"Error in ask_user: {str(e)}")
+        frappe.log_error(f"Error in ask_user",f"{str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def update_draft_field(draft_id, field_name, field_value, action="update"):
+    """Update a specific field in the draft data without overwriting other fields"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+        
+        # Get current draft data
+        current_data = draft.get_draft_data_dict()
+        
+        # Perform the requested action
+        if action == "remove":
+            if field_name in current_data:
+                del current_data[field_name]
+                message = f"Removed field '{field_name}'"
+            else:
+                message = f"Field '{field_name}' not found, nothing to remove"
+        else:  # add or update
+            current_data[field_name] = field_value
+            action_word = "Added" if field_name not in current_data else "Updated"
+            message = f"{action_word} field '{field_name}' = '{field_value}'"
+        
+        # Update draft with modified data
+        draft.update_draft_data(current_data)
+        # Only change status to "In Progress" if not already in "Update Mode"
+        if draft.status != "Update Mode":
+            draft.status = "In Progress"
+        draft.save()
+        
+        return {
+            "success": True,
+            "message": message,
+            "field_name": field_name,
+            "field_value": field_value if action != "remove" else None,
+            "action": action,
+            "current_data": current_data
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error updating draft field",f"{str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def update_multiple_fields(draft_id, field_updates):
+    """Update multiple specific fields in the draft data without overwriting existing data"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+        
+        # Get current draft data
+        current_data = draft.get_draft_data_dict()
+        
+        # Update multiple fields
+        updated_fields = []
+        for field_name, field_value in field_updates.items():
+            action_word = "Added" if field_name not in current_data else "Updated"
+            current_data[field_name] = field_value
+            updated_fields.append(f"{action_word} '{field_name}' = '{field_value}'")
+        
+        # Update draft with modified data
+        draft.update_draft_data(current_data)
+        # Only change status to "In Progress" if not already in "Update Mode"
+        if draft.status != "Update Mode":
+            draft.status = "In Progress"
+        draft.save()
+        
+        return {
+            "success": True,
+            "message": f"Updated {len(field_updates)} fields: {', '.join(updated_fields)}",
+            "updated_fields": field_updates,
+            "current_data": current_data
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error updating multiple fields",f"{str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def create_document_from_draft(draft_id):
+    """Create actual document from draft data with validation and error feedback"""
+    try:
+        # Get draft and validate permissions
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to create documents with this wizard"))
+        
+        # Get draft data
+        draft_data = draft.get_draft_data_dict()
+        
+        if not draft_data:
+            return {
+                "success": False,
+                "error": "No draft data found. Please provide some information first."
+            }
+        
+        # Parse and validate draft data for the target doctype
+        parsed_data, validation_errors = parse_and_validate_draft_data(
+            draft.target_doctype, 
+            draft_data
+        )
+        
+        if validation_errors:
+            return {
+                "success": False,
+                "error": f"Validation errors: {'; '.join(validation_errors)}"
+            }
+        
+        # Check if we're in update mode
+        target_document = draft.get("target_document")
+        
+        if draft.status == "Update Mode" and target_document:
+            # Update existing document
+            existing_doc = frappe.get_doc(draft.target_doctype, target_document)
+            
+            # Update fields with parsed data
+            for field_name, field_value in parsed_data.items():
+                existing_doc.set(field_name, field_value)
+            
+            # Save the updated document
+            existing_doc.save()
+            
+            # Update draft status
+            draft.status = "Completed"
+            draft.save()
+            
+            # Add success message to conversation
+            draft.add_message_to_conversation(
+                "system",
+                f"Document updated successfully: {existing_doc.name}",
+                {"action": "document_updated", "document_name": existing_doc.name}
+            )
+            draft.save()
+            
+            return {
+                "success": True,
+                "document_name": existing_doc.name,
+                "message": f"{draft.target_doctype} '{existing_doc.name}' updated successfully"
+            }
+        else:
+            # Create new document
+            new_doc = frappe.get_doc({
+                "doctype": draft.target_doctype,
+                **parsed_data
+            })
+            
+            # Insert the document
+            new_doc.insert()
+            
+            # Update draft status
+            draft.status = "Completed"
+            draft.save()
+            
+            # Add success message to conversation
+            draft.add_message_to_conversation(
+                "system",
+                f"Document created successfully: {new_doc.name}",
+                {"action": "document_created", "document_name": new_doc.name}
+            )
+            draft.save()
+            
+            return {
+                "success": True,
+                "document_name": new_doc.name,
+                "message": f"{draft.target_doctype} '{new_doc.name}' created successfully"
+            }
+        
+    except frappe.ValidationError as e:
+        # Frappe validation errors - these are user-fixable
+        return {
+            "success": False,
+            "error": f"Validation Error: {str(e)}"
+        }
+    except frappe.DuplicateEntryError as e:
+        # Duplicate entry errors
+        return {
+            "success": False,
+            "error": f"Duplicate Entry: {str(e)}"
+        }
+    except Exception as e:
+        # Log unexpected errors
+        frappe.log_error(f"Error creating document from draft", f"Draft ID: {draft_id}, Error: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }
+
+
+def parse_and_validate_draft_data(target_doctype, draft_data):
+    """Parse draft data and validate against doctype schema"""
+    try:
+        # Get doctype metadata
+        meta = frappe.get_meta(target_doctype)
+        
+        parsed_data = {}
+        validation_errors = []
+        
+        # Get all valid field names for this doctype
+        valid_fields = {field.fieldname: field for field in meta.fields}
+        valid_fields.update({
+            'name': type('Field', (), {'fieldname': 'name', 'fieldtype': 'Data', 'reqd': 0})(),
+            'owner': type('Field', (), {'fieldname': 'owner', 'fieldtype': 'Data', 'reqd': 0})(),
+            'creation': type('Field', (), {'fieldname': 'creation', 'fieldtype': 'Datetime', 'reqd': 0})(),
+            'modified': type('Field', (), {'fieldname': 'modified', 'fieldtype': 'Datetime', 'reqd': 0})(),
+            'modified_by': type('Field', (), {'fieldname': 'modified_by', 'fieldtype': 'Data', 'reqd': 0})(),
+            'docstatus': type('Field', (), {'fieldname': 'docstatus', 'fieldtype': 'Int', 'reqd': 0})(),
+        })
+        
+        # Process each field in draft data
+        for field_name, field_value in draft_data.items():
+            if field_name in valid_fields:
+                field_meta = valid_fields[field_name]
+                
+                # Skip system fields that shouldn't be set manually
+                if field_name in ['name', 'owner', 'creation', 'modified', 'modified_by', 'docstatus', 'doctype']:
+                    continue
+                
+                # Validate and convert field value
+                try:
+                    converted_value = validate_and_convert_field_value(
+                        field_meta, field_value, field_name
+                    )
+                    if converted_value is not None:
+                        parsed_data[field_name] = converted_value
+                except ValueError as e:
+                    validation_errors.append(f"Field '{field_name}': {str(e)}")
+            else:
+                # Field doesn't exist in doctype
+                validation_errors.append(f"Field '{field_name}' does not exist in {target_doctype}")
+        
+        # Check for required fields
+        for field in meta.fields:
+            if field.reqd and field.fieldname not in parsed_data:
+                # Check if field has a default value
+                if not field.default:
+                    validation_errors.append(f"Required field '{field.fieldname}' is missing")
+        
+        return parsed_data, validation_errors
+        
+    except Exception as e:
+        return {}, [f"Error parsing draft data: {str(e)}"]
+
+
+def validate_and_convert_field_value(field_meta, field_value, field_name):
+    """Validate and convert field value based on field type"""
+    if field_value is None or field_value == "":
+        return None
+    
+    field_type = field_meta.fieldtype
+    
+    try:
+        # Convert based on field type
+        if field_type in ['Data', 'Text', 'Small Text', 'Long Text', 'Text Editor']:
+            return str(field_value).strip()
+        
+        elif field_type == 'Int':
+            return int(float(str(field_value)))  # Handle "123.0" -> 123
+        
+        elif field_type in ['Float', 'Currency', 'Percent']:
+            return float(field_value)
+        
+        elif field_type == 'Check':
+            if isinstance(field_value, bool):
+                return field_value
+            return str(field_value).lower() in ['1', 'true', 'yes', 'on']
+        
+        elif field_type in ['Date', 'Datetime', 'Time']:
+            # For now, return as string - Frappe will handle conversion
+            return str(field_value)
+        
+        elif field_type == 'Link':
+            # Validate that linked document exists
+            link_doctype = field_meta.options
+            if link_doctype and not frappe.db.exists(link_doctype, field_value):
+                raise ValueError(f"Linked document '{field_value}' does not exist in {link_doctype}")
+            return str(field_value)
+        
+        elif field_type == 'Select':
+            # Validate against options
+            if hasattr(field_meta, 'options') and field_meta.options:
+                valid_options = [opt.strip() for opt in field_meta.options.split('\n') if opt.strip()]
+                if valid_options and str(field_value) not in valid_options:
+                    raise ValueError(f"Invalid option '{field_value}'. Valid options: {', '.join(valid_options)}")
+            return str(field_value)
+        
+        else:
+            # Default: return as string
+            return str(field_value)
+    
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid value '{field_value}' for {field_type} field: {str(e)}")
+
+
+@frappe.whitelist()
+def set_update_mode(draft_id, document_name, reason=""):
+    """Switch wizard from create mode to update mode for an existing document"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+        
+        # Validate that the document exists
+        if not frappe.db.exists(draft.target_doctype, document_name):
+            return {
+                "success": False,
+                "error": f"{draft.target_doctype} '{document_name}' does not exist"
+            }
+        
+        # Get the existing document data to populate the draft
+        existing_doc = frappe.get_doc(draft.target_doctype, document_name)
+        existing_data = existing_doc.as_dict()
+        
+        # Remove system fields that shouldn't be in draft
+        system_fields = ['name', 'owner', 'creation', 'modified', 'modified_by', 'docstatus', 'idx', 'doctype']
+        for field in system_fields:
+            existing_data.pop(field, None)
+        
+        # Update draft with existing document data
+        draft.update_draft_data(existing_data)
+        draft.status = "Update Mode"
+        
+        # Store the target document name for updates
+        draft.db_set("target_document", document_name)
+        draft.save()
+        
+        # Add system message about mode switch
+        draft.add_message_to_conversation(
+            "system",
+            f"Switched to update mode for {draft.target_doctype} '{document_name}'. {reason}",
+            {"action": "set_update_mode", "document_name": document_name, "reason": reason}
+        )
+        draft.save()
+        
+        return {
+            "success": True,
+            "message": f"Switched to update mode for {draft.target_doctype} '{document_name}'",
+            "document_name": document_name,
+            "mode": "update",
+            "existing_data": existing_data
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error setting update mode", f"Draft ID: {draft_id}, Error: {str(e)}")
         return {"success": False, "error": str(e)}
 
 

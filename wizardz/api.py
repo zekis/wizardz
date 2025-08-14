@@ -410,6 +410,7 @@ def build_base_messages(draft, wizard_config):
             "To ask questions, use ask_user tool",
             "To search for duplicates, use search_documents tool", 
             "To save data, use update_draft_field or update_multiple_fields tools ONLY",
+            "Save data after every answer to avoid data loss",
             "When you have sufficient information, tell the user to click the 'Create [DocType]' or 'Update [DocType]' button to finalize the document",
             "Never respond without using a tool"
         ],
@@ -479,21 +480,29 @@ def generate_base_system_prompt(target_doctype):
 3. **Handle Duplicates**: If duplicates found, ask user whether to update existing or create new record
 4. **Identify Prerequisites**: Check if any linked DocTypes need to be created first
 5. **Collect MANDATORY Fields ONLY**: Focus exclusively on required fields (reqd=1) initially
-6. **Auto-Validate Links**: When user provides a value for a Link field, IMMEDIATELY use search_documents to check if the linked document exists
-7. **Handle Missing Links**: If linked document doesn't exist, use add_dependent_doctype and start collecting data for the missing DocType
-8. **Save Incrementally**: Use update_draft_field or update_multiple_fields tools to save information as you collect it
+6. **SAVE EVERY ANSWER**: IMMEDIATELY after receiving ANY answer from the user, use update_draft_field or update_multiple_fields to save the information to the draft
+7. **Auto-Validate Links**: When user provides a value for a Link field, IMMEDIATELY use search_documents to check if the linked document exists
+8. **Handle Missing Links**: If linked document doesn't exist, use add_dependent_doctype and start collecting data for the missing DocType
 9. **Validate Mandatory Completion**: Once ALL mandatory fields are collected, offer to continue with optional fields
 10. **Optional Fields Phase**: Ask user if they want to provide additional optional information
 11. **Complete Process**: When user is satisfied, tell them to click the "Create {target_doctype}" or "Update {target_doctype}" button to finalize the document
 
+## CRITICAL DATA SAVING RULE - SAVE AFTER EVERY USER RESPONSE:
+- **MANDATORY**: After EVERY user response that contains information, you MUST use update_draft_field or update_multiple_fields to save the data
+- **No exceptions**: Even if you plan to ask follow-up questions, save the current information first
+- **Immediate saving**: Save data as soon as the user provides it, before asking the next question
+- **Multiple fields**: If the user provides multiple pieces of information in one response, save all of them using update_multiple_fields
+- **Confirmation**: After saving, briefly confirm what was saved (e.g., "Saved project name as 'ABC Project'")
+
 ## Data Collection Strategy - MANDATORY FIELDS FIRST:
 - **Phase 1 - Required Fields Only**: Focus EXCLUSIVELY on mandatory fields (reqd=1) from the schema
 - **One question at a time**: Ask for one mandatory field at a time to avoid overwhelming the user
+- **SAVE IMMEDIATELY**: After each user answer, IMMEDIATELY save the information using update_draft_field or update_multiple_fields
 - **Skip optional fields initially**: Do NOT ask about optional fields until all mandatory fields are complete
 - **Validate completeness**: Check that all required fields have been collected before proceeding
 - **Phase 2 - Optional Fields**: Once all mandatory fields are complete, ask: "All required information has been collected. Would you like to provide additional optional details, or shall we create the {target_doctype} record now?"
 - **User choice**: Let the user decide whether to continue with optional fields or finalize the document
-- **Save incrementally**: Use update_draft_field or update_multiple_fields tools to save information as you collect it
+- **Always save first**: Even in optional phase, save any information provided before asking the next question
 - **Provide context**: Use field descriptions from schema to explain why information is needed
 
 ## Communication Style:

@@ -261,6 +261,48 @@ def build_base_messages(draft, wizard_config):
                 "description": "Switch wizard from create mode to update mode for an existing document",
                 "parameters": "document_name (string), reason (optional string explaining why switching to update)",
                 "example": "{\"tool\": \"set_update_mode\", \"parameters\": {\"document_name\": \"Bob Smith\", \"reason\": \"Customer already exists, user wants to update\"}}"
+            },
+            {
+                "name": "add_dependent_doctype",
+                "description": "Add a dependent DocType that needs to be created before the main document",
+                "parameters": "doctype (string), dependency_reason (string), priority (optional int, default 1)",
+                "example": "{\"tool\": \"add_dependent_doctype\", \"parameters\": {\"doctype\": \"Customer\", \"dependency_reason\": \"Customer 'TechStart Solutions' does not exist and is required for Project\", \"priority\": 1}}"
+            },
+            {
+                "name": "update_doctype_field",
+                "description": "Update a field for a specific DocType in the multi-doctype draft",
+                "parameters": "doctype (string), field_name (string), field_value (any), action (optional: 'add', 'update', 'remove')",
+                "example": "{\"tool\": \"update_doctype_field\", \"parameters\": {\"doctype\": \"Customer\", \"field_name\": \"customer_name\", \"field_value\": \"TechStart Solutions\", \"action\": \"add\"}}"
+            },
+            {
+                "name": "get_creation_order",
+                "description": "Get the order in which DocTypes should be created based on dependencies",
+                "parameters": "draft_id (string)",
+                "example": "{\"tool\": \"get_creation_order\", \"parameters\": {\"draft_id\": \"DRAFT-001\"}}"
+            },
+            {
+                "name": "add_child_table_row",
+                "description": "Add a row to a child table field",
+                "parameters": "table_field_name (string), row_data (object with field names and values)",
+                "example": "{\"tool\": \"add_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_data\": {\"item_code\": \"ITEM-001\", \"qty\": 5, \"rate\": 100}}}"
+            },
+            {
+                "name": "update_child_table_row",
+                "description": "Update a specific row in a child table field",
+                "parameters": "table_field_name (string), row_index (int), row_data (object with field names and values)",
+                "example": "{\"tool\": \"update_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_index\": 0, \"row_data\": {\"qty\": 10, \"rate\": 120}}}"
+            },
+            {
+                "name": "remove_child_table_row",
+                "description": "Remove a row from a child table field",
+                "parameters": "table_field_name (string), row_index (int)",
+                "example": "{\"tool\": \"remove_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_index\": 1}}"
+            },
+            {
+                "name": "get_child_table_schema",
+                "description": "Get the schema of a child table (Table fieldtype)",
+                "parameters": "child_doctype_name (string)",
+                "example": "{\"tool\": \"get_child_table_schema\", \"parameters\": {\"child_doctype_name\": \"Sales Order Item\"}}"
             }
         ],
         "critical_rules": [
@@ -318,10 +360,11 @@ def generate_base_system_prompt(target_doctype):
 3. **Handle Duplicates**: If duplicates found, ask user whether to update existing or create new record
 4. **Identify Prerequisites**: Check if any linked DocTypes need to be created first
 5. **Collect Data Systematically**: Ask for information based on field requirements and dependencies
-6. **Save Incrementally**: Use update_draft_field or update_multiple_fields tools to save information as you collect it
-7. **Validate Data**: Ensure collected data meets field requirements before saving
-8. **Handle Links**: Guide user through creating linked records if needed
-9. **Complete Process**: When you have sufficient information, tell the user to click the "Create {target_doctype}" or "Update {target_doctype}" button to finalize the document
+6. **Auto-Validate Links**: When user provides a value for a Link field, IMMEDIATELY use search_documents to check if the linked document exists
+7. **Handle Missing Links**: If linked document doesn't exist, use add_dependent_doctype and start collecting data for the missing DocType
+8. **Save Incrementally**: Use update_draft_field or update_multiple_fields tools to save information as you collect it
+9. **Validate Data**: Ensure collected data meets field requirements before saving
+10. **Complete Process**: When you have sufficient information, tell the user to click the "Create {target_doctype}" or "Update {target_doctype}" button to finalize the document
 
 ## Data Collection Strategy:
 - Start with mandatory fields first
@@ -427,6 +470,30 @@ def parse_and_execute_tools(ai_response, draft_id):
             result["results"]["set_update_mode"] = tool_result
             return result
             
+        elif tool_name == "add_dependent_doctype":
+            doctype = parameters.get("doctype", "")
+            dependency_reason = parameters.get("dependency_reason", "")
+            priority = parameters.get("priority", 1)
+            
+            tool_result = add_dependent_doctype(draft_id, doctype, dependency_reason, priority)
+            result["results"]["add_dependent_doctype"] = tool_result
+            return result
+            
+        elif tool_name == "update_doctype_field":
+            doctype = parameters.get("doctype", "")
+            field_name = parameters.get("field_name", "")
+            field_value = parameters.get("field_value", "")
+            action = parameters.get("action", "update")
+            
+            tool_result = update_doctype_field(draft_id, doctype, field_name, field_value, action)
+            result["results"]["update_doctype_field"] = tool_result
+            return result
+            
+        elif tool_name == "get_creation_order":
+            tool_result = get_creation_order(draft_id)
+            result["results"]["get_creation_order"] = tool_result
+            return result
+            
         else:
             raise ValueError(f"Unknown tool: {tool_name}")
             
@@ -457,8 +524,12 @@ def get_doctype_schema(doctype):
             "autoname": meta.autoname
         }
         
+        # Separate link fields for special attention
+        link_fields = []
+        regular_fields = []
+        
         for field in meta.fields:
-            schema["fields"].append({
+            field_info = {
                 "fieldname": field.fieldname,
                 "fieldtype": field.fieldtype,
                 "label": field.label,
@@ -467,7 +538,23 @@ def get_doctype_schema(doctype):
                 "description": field.description,
                 "default": field.default,
                 "in_list_view": field.in_list_view
-            })
+            }
+            
+            if field.fieldtype == "Link":
+                # Add additional context for Link fields
+                field_info["is_link_field"] = True
+                field_info["linked_doctype"] = field.options
+                field_info["dependency_note"] = f"This field links to {field.options} DocType. If the specified {field.options} doesn't exist, it must be created first."
+                link_fields.append(field_info)
+            else:
+                regular_fields.append(field_info)
+        
+        # Combine with link fields first to highlight them
+        schema["fields"] = link_fields + regular_fields
+        schema["link_fields_summary"] = {
+            "count": len(link_fields),
+            "fields": [{"fieldname": f["fieldname"], "linked_doctype": f["linked_doctype"], "required": f["reqd"]} for f in link_fields]
+        }
         
         return schema
         
@@ -957,6 +1044,169 @@ def set_update_mode(draft_id, document_name, reason=""):
         
     except Exception as e:
         frappe.log_error(f"Error setting update mode", f"Draft ID: {draft_id}, Error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def add_dependent_doctype(draft_id, doctype, dependency_reason, priority=1):
+    """Add a dependent DocType that needs to be created before the main document"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+        
+        # Get current draft data
+        current_data = draft.get_draft_data_dict()
+        
+        # Initialize multi-doctype structure if not exists
+        if "_multi_doctype" not in current_data:
+            current_data["_multi_doctype"] = {
+                "dependencies": [],
+                "creation_order": [],
+                "doctypes": {}
+            }
+        
+        # Add dependency if not already exists
+        dependency_exists = any(
+            dep["doctype"] == doctype 
+            for dep in current_data["_multi_doctype"]["dependencies"]
+        )
+        
+        if not dependency_exists:
+            current_data["_multi_doctype"]["dependencies"].append({
+                "doctype": doctype,
+                "reason": dependency_reason,
+                "priority": priority,
+                "status": "pending"
+            })
+            
+            # Initialize doctype data structure
+            current_data["_multi_doctype"]["doctypes"][doctype] = {}
+            
+            # Update creation order
+            current_data["_multi_doctype"]["creation_order"] = sorted(
+                current_data["_multi_doctype"]["dependencies"],
+                key=lambda x: x["priority"]
+            )
+        
+        # Update draft with modified data
+        draft.update_draft_data(current_data)
+        draft.save()
+        
+        return {
+            "success": True,
+            "message": f"Added {doctype} as dependency: {dependency_reason}",
+            "doctype": doctype,
+            "priority": priority,
+            "dependencies": current_data["_multi_doctype"]["dependencies"]
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error adding dependent doctype", f"Draft ID: {draft_id}, Error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def update_doctype_field(draft_id, doctype, field_name, field_value, action="update"):
+    """Update a field for a specific DocType in the multi-doctype draft"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+        
+        # Get current draft data
+        current_data = draft.get_draft_data_dict()
+        
+        # Initialize multi-doctype structure if not exists
+        if "_multi_doctype" not in current_data:
+            current_data["_multi_doctype"] = {
+                "dependencies": [],
+                "creation_order": [],
+                "doctypes": {}
+            }
+        
+        # Initialize doctype data if not exists
+        if doctype not in current_data["_multi_doctype"]["doctypes"]:
+            current_data["_multi_doctype"]["doctypes"][doctype] = {}
+        
+        # Update the specific doctype field
+        doctype_data = current_data["_multi_doctype"]["doctypes"][doctype]
+        
+        if action == "remove":
+            if field_name in doctype_data:
+                del doctype_data[field_name]
+                message = f"Removed {doctype}.{field_name}"
+            else:
+                message = f"Field {doctype}.{field_name} not found, nothing to remove"
+        else:  # add or update
+            doctype_data[field_name] = field_value
+            action_word = "Added" if field_name not in doctype_data else "Updated"
+            message = f"{action_word} {doctype}.{field_name} = '{field_value}'"
+        
+        # Update draft with modified data
+        draft.update_draft_data(current_data)
+        draft.save()
+        
+        return {
+            "success": True,
+            "message": message,
+            "doctype": doctype,
+            "field_name": field_name,
+            "field_value": field_value if action != "remove" else None,
+            "action": action,
+            "doctype_data": doctype_data
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error updating doctype field", f"Draft ID: {draft_id}, Error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def get_creation_order(draft_id):
+    """Get the order in which DocTypes should be created based on dependencies"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+        
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to view this draft"))
+        
+        # Get current draft data
+        current_data = draft.get_draft_data_dict()
+        
+        # Check if multi-doctype structure exists
+        if "_multi_doctype" not in current_data:
+            # Single doctype mode
+            return {
+                "success": True,
+                "creation_order": [draft.target_doctype],
+                "dependencies": [],
+                "mode": "single"
+            }
+        
+        # Multi-doctype mode
+        multi_data = current_data["_multi_doctype"]
+        creation_order = [dep["doctype"] for dep in multi_data.get("creation_order", [])]
+        
+        # Add main doctype at the end if not already included
+        if draft.target_doctype not in creation_order:
+            creation_order.append(draft.target_doctype)
+        
+        return {
+            "success": True,
+            "creation_order": creation_order,
+            "dependencies": multi_data.get("dependencies", []),
+            "mode": "multi",
+            "doctypes_data": multi_data.get("doctypes", {})
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Error getting creation order", f"Draft ID: {draft_id}, Error: {str(e)}")
         return {"success": False, "error": str(e)}
 
 

@@ -106,13 +106,16 @@ def start_wizard_session(wizard_config, draft_name, target_doctype, existing_doc
         if document_name:
             draft.target_document = str(document_name)[:140]
             
-            # If we don't have the document data, fetch it from the database
-            if not existing_doc_data:
-                try:
-                    existing_doc_obj = frappe.get_doc(target_doctype, document_name)
-                    existing_doc_data = existing_doc_obj.as_dict()
-                except Exception as e:
-                    frappe.log_error(f"Error fetching existing document for update mode", f"DocType: {target_doctype}, Name: {document_name}, Error: {str(e)}")
+            # Always fetch the latest document data from the database for consistency
+            try:
+                existing_doc_obj = frappe.get_doc(target_doctype, document_name)
+                existing_doc_data = existing_doc_obj.as_dict()
+            except Exception as e:
+                frappe.log_error(f"Error fetching existing document for update mode", f"DocType: {target_doctype}, Name: {document_name}, Error: {str(e)}")
+                return {
+                    "success": False,
+                    "error": f"Could not fetch existing document '{document_name}' for update mode: {str(e)}"
+                }
             
             # Clean and populate draft data with existing document data
             if existing_doc_data:
@@ -126,7 +129,7 @@ def start_wizard_session(wizard_config, draft_name, target_doctype, existing_doc
                         if field_value != "" and field_value != []:
                             cleaned_data[field_name] = field_value
                 
-                # Populate draft with existing document data
+                # Always populate draft with existing document data BEFORE inserting
                 draft.update_draft_data(cleaned_data)
     
     draft.insert()
@@ -205,12 +208,40 @@ def get_ai_response(draft, wizard_config, user_message):
         # Build base messages
         messages = build_base_messages(draft, wizard_config)
         
+        # Log the complete prompt being sent to AI
+        draft.add_debug_entry(
+            "AI_REQUEST_PROMPT",
+            f"Complete prompt being sent to AI (iteration 1)",
+            {
+                "model": wizard_config.ai_model,
+                "max_tokens": ai_config["max_tokens"],
+                "temperature": ai_config["temperature"],
+                "message_count": len(messages),
+                "messages": messages
+            }
+        )
+        # Don't save here - will save after AI response
+        
         # AI-Tool execution loop
         max_iterations = 5  # Prevent infinite loops
         iteration = 0
         
         while iteration < max_iterations:
             iteration += 1
+            
+            # Log AI request details for this iteration
+            draft.add_debug_entry(
+                "AI_REQUEST",
+                f"Sending request to OpenAI (iteration {iteration})",
+                {
+                    "iteration": iteration,
+                    "model": wizard_config.ai_model,
+                    "max_tokens": ai_config["max_tokens"],
+                    "temperature": ai_config["temperature"],
+                    "message_count": len(messages),
+                    "last_message": messages[-1] if messages else None
+                }
+            )
             
             # Get AI response
             response = client.chat.completions.create(
@@ -221,6 +252,20 @@ def get_ai_response(draft, wizard_config, user_message):
             )
             
             ai_response = response.choices[0].message.content
+            
+            # Log AI response details
+            draft.add_debug_entry(
+                "AI_RESPONSE_RAW",
+                f"Raw AI response received (iteration {iteration})",
+                {
+                    "iteration": iteration,
+                    "response_length": len(ai_response),
+                    "response_content": ai_response,
+                    "usage": response.usage.dict() if hasattr(response, 'usage') else None,
+                    "model": response.model if hasattr(response, 'model') else wizard_config.ai_model
+                }
+            )
+            # Don't save here - will save after tool execution
             
             # Parse and execute tool calls
             tool_result = parse_and_execute_tools(ai_response, draft.name)
@@ -433,19 +478,23 @@ def generate_base_system_prompt(target_doctype):
 2. **Check for Existing Records**: ALWAYS use search_documents to check if records already exist before proceeding
 3. **Handle Duplicates**: If duplicates found, ask user whether to update existing or create new record
 4. **Identify Prerequisites**: Check if any linked DocTypes need to be created first
-5. **Collect Data Systematically**: Ask for information based on field requirements and dependencies
+5. **Collect MANDATORY Fields ONLY**: Focus exclusively on required fields (reqd=1) initially
 6. **Auto-Validate Links**: When user provides a value for a Link field, IMMEDIATELY use search_documents to check if the linked document exists
 7. **Handle Missing Links**: If linked document doesn't exist, use add_dependent_doctype and start collecting data for the missing DocType
 8. **Save Incrementally**: Use update_draft_field or update_multiple_fields tools to save information as you collect it
-9. **Validate Data**: Ensure collected data meets field requirements before saving
-10. **Complete Process**: When you have sufficient information, tell the user to click the "Create {target_doctype}" or "Update {target_doctype}" button to finalize the document
+9. **Validate Mandatory Completion**: Once ALL mandatory fields are collected, offer to continue with optional fields
+10. **Optional Fields Phase**: Ask user if they want to provide additional optional information
+11. **Complete Process**: When user is satisfied, tell them to click the "Create {target_doctype}" or "Update {target_doctype}" button to finalize the document
 
-## Data Collection Strategy:
-- Start with mandatory fields first
-- Ask one question at a time to avoid overwhelming the user
-- Use the schema to provide appropriate field options and validation
-- Save data to draft after collecting each piece of information
-- Provide helpful context based on field descriptions from schema
+## Data Collection Strategy - MANDATORY FIELDS FIRST:
+- **Phase 1 - Required Fields Only**: Focus EXCLUSIVELY on mandatory fields (reqd=1) from the schema
+- **One question at a time**: Ask for one mandatory field at a time to avoid overwhelming the user
+- **Skip optional fields initially**: Do NOT ask about optional fields until all mandatory fields are complete
+- **Validate completeness**: Check that all required fields have been collected before proceeding
+- **Phase 2 - Optional Fields**: Once all mandatory fields are complete, ask: "All required information has been collected. Would you like to provide additional optional details, or shall we create the {target_doctype} record now?"
+- **User choice**: Let the user decide whether to continue with optional fields or finalize the document
+- **Save incrementally**: Use update_draft_field or update_multiple_fields tools to save information as you collect it
+- **Provide context**: Use field descriptions from schema to explain why information is needed
 
 ## Communication Style:
 - Be conversational and helpful in your questions
@@ -475,8 +524,59 @@ def parse_and_execute_tools(ai_response, draft_id):
         "user_message": None
     }
     
+    # Get draft for debug logging
     try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        
+        # Log the raw AI response to debug log
+        draft.add_debug_entry(
+            "AI_RESPONSE", 
+            f"Raw AI Response (first 500 chars): {ai_response[:500]}...",
+            {"full_response": ai_response, "response_length": len(ai_response)}
+        )
+        
         # Try to parse as JSON
+        tool_call = json.loads(ai_response.strip())
+        
+        if not isinstance(tool_call, dict) or "tool" not in tool_call:
+            raise ValueError("Invalid tool call format")
+        
+        tool_name = tool_call["tool"]
+        parameters = tool_call.get("parameters", {})
+        
+        result["has_tools"] = True
+        
+        # Log successful tool call parsing
+        draft.add_debug_entry(
+            "TOOL_PARSED",
+            f"Successfully parsed tool call: {tool_name}",
+            {"tool_name": tool_name, "parameters": parameters, "raw_call": tool_call}
+        )
+        
+        # Log the tool call to conversation history
+        draft.add_message_to_conversation(
+            "system",
+            f"AI used tool: {tool_name}",
+            {
+                "action": "tool_call",
+                "tool_name": tool_name,
+                "parameters": parameters,
+                "raw_call": tool_call
+            }
+        )
+        
+        # Save debug and conversation updates
+        draft.save()
+        
+    except frappe.DoesNotExistError:
+        frappe.log_error(f"Draft not found for debug logging", f"Draft ID: {draft_id}")
+        draft = None
+    except Exception as debug_error:
+        frappe.log_error(f"Error in debug logging setup", f"Draft: {draft_id}, Error: {str(debug_error)}")
+        draft = None
+    
+    try:
+        # Try to parse as JSON (duplicate parsing for error handling)
         tool_call = json.loads(ai_response.strip())
         
         if not isinstance(tool_call, dict) or "tool" not in tool_call:
@@ -495,6 +595,9 @@ def parse_and_execute_tools(ai_response, draft_id):
             tool_result = ask_user(draft_id, question, context)
             result["results"]["ask_user"] = tool_result
             result["user_message"] = question  # Return question to frontend
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "search_documents":
@@ -505,6 +608,9 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             tool_result = search_documents(doctype, search_fields, search_term, limit)
             result["results"]["search_documents"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "update_draft_field":
@@ -514,6 +620,9 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             tool_result = update_draft_field(draft_id, field_name, field_value, action)
             result["results"]["update_draft_field"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "update_multiple_fields":
@@ -521,12 +630,18 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             tool_result = update_multiple_fields(draft_id, field_updates)
             result["results"]["update_multiple_fields"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
             
         elif tool_name == "get_draft_data":
             tool_result = get_draft_data(draft_id)
             result["results"]["get_draft_data"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "get_doctype_schema":
@@ -534,6 +649,9 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             tool_result = get_doctype_schema(doctype_name)
             result["results"]["get_doctype_schema"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "set_update_mode":
@@ -542,6 +660,9 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             tool_result = set_update_mode(draft_id, document_name, reason)
             result["results"]["set_update_mode"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "add_dependent_doctype":
@@ -551,6 +672,9 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             tool_result = add_dependent_doctype(draft_id, doctype, dependency_reason, priority)
             result["results"]["add_dependent_doctype"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "update_doctype_field":
@@ -561,11 +685,17 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             tool_result = update_doctype_field(draft_id, doctype, field_name, field_value, action)
             result["results"]["update_doctype_field"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         elif tool_name == "get_creation_order":
             tool_result = get_creation_order(draft_id)
             result["results"]["get_creation_order"] = tool_result
+            
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
             return result
             
         else:
@@ -897,22 +1027,60 @@ def create_document_from_draft(draft_id):
         if not wizard_config.has_permission_for_user():
             frappe.throw(_("You don't have permission to create documents with this wizard"))
         
+        # Log document creation start
+        draft.add_debug_entry(
+            "DOC_CREATE_START",
+            f"Starting document creation for {draft.target_doctype}",
+            {"draft_id": draft_id, "target_doctype": draft.target_doctype}
+        )
+        
         # Get draft data
         draft_data = draft.get_draft_data_dict()
         
+        # Log raw draft data
+        draft.add_debug_entry(
+            "DRAFT_DATA_RAW",
+            f"Raw draft data contains {len(draft_data)} fields",
+            {"draft_data": draft_data, "field_count": len(draft_data)}
+        )
+        
         if not draft_data:
+            draft.add_debug_entry("DOC_CREATE_ERROR", "No draft data found", {"error": "empty_draft_data"})
             return {
                 "success": False,
                 "error": "No draft data found. Please provide some information first."
             }
         
         # Parse and validate draft data for the target doctype
+        draft.add_debug_entry(
+            "PARSING_START",
+            f"Starting JSON to DocType parsing for {draft.target_doctype}",
+            {"target_doctype": draft.target_doctype}
+        )
+        
         parsed_data, validation_errors = parse_and_validate_draft_data(
             draft.target_doctype, 
             draft_data
         )
         
+        # Log parsing results
+        draft.add_debug_entry(
+            "PARSING_RESULT",
+            f"Parsing completed - {len(parsed_data)} fields parsed, {len(validation_errors)} validation errors",
+            {
+                "parsed_data": parsed_data,
+                "validation_errors": validation_errors,
+                "parsed_field_count": len(parsed_data),
+                "error_count": len(validation_errors)
+            }
+        )
+        
         if validation_errors:
+            draft.add_debug_entry(
+                "DOC_CREATE_ERROR",
+                f"Validation failed with {len(validation_errors)} errors",
+                {"validation_errors": validation_errors}
+            )
             return {
                 "success": False,
                 "error": f"Validation errors: {'; '.join(validation_errors)}"
@@ -923,14 +1091,34 @@ def create_document_from_draft(draft_id):
         
         if draft.status == "Update Mode" and target_document:
             # Update existing document
+            draft.add_debug_entry(
+                "DOC_UPDATE_START",
+                f"Starting document update for existing {draft.target_doctype}: {target_document}",
+                {"target_document": target_document, "parsed_data": parsed_data}
+            )
+            
             existing_doc = frappe.get_doc(draft.target_doctype, target_document)
             
             # Update fields with parsed data
             for field_name, field_value in parsed_data.items():
                 existing_doc.set(field_name, field_value)
             
+            # Log document save attempt
+            draft.add_debug_entry(
+                "DOC_SAVE_ATTEMPT",
+                f"Attempting to save updated {draft.target_doctype} document",
+                {"document_name": existing_doc.name, "updated_fields": list(parsed_data.keys())}
+            )
+            
             # Save the updated document
             existing_doc.save()
+            
+            # Log successful update
+            draft.add_debug_entry(
+                "DOC_UPDATE_SUCCESS",
+                f"Document updated successfully: {existing_doc.name}",
+                {"document_name": existing_doc.name, "doctype": draft.target_doctype}
+            )
             
             # Update draft status
             draft.status = "Completed"
@@ -951,13 +1139,33 @@ def create_document_from_draft(draft_id):
             }
         else:
             # Create new document
+            draft.add_debug_entry(
+                "DOC_CREATE_NEW",
+                f"Creating new {draft.target_doctype} document",
+                {"parsed_data": parsed_data, "field_count": len(parsed_data)}
+            )
+            
             new_doc = frappe.get_doc({
                 "doctype": draft.target_doctype,
                 **parsed_data
             })
             
+            # Log document insertion attempt
+            draft.add_debug_entry(
+                "DOC_INSERT_ATTEMPT",
+                f"Attempting to insert new {draft.target_doctype} document",
+                {"doctype": draft.target_doctype, "fields_to_insert": list(parsed_data.keys())}
+            )
+            
             # Insert the document
             new_doc.insert()
+            
+            # Log successful creation
+            draft.add_debug_entry(
+                "DOC_CREATE_SUCCESS",
+                f"Document created successfully: {new_doc.name}",
+                {"document_name": new_doc.name, "doctype": draft.target_doctype}
+            )
             
             # Update draft status
             draft.status = "Completed"
@@ -979,18 +1187,36 @@ def create_document_from_draft(draft_id):
         
     except frappe.ValidationError as e:
         # Frappe validation errors - these are user-fixable
+        draft.add_debug_entry(
+            "DOC_CREATE_ERROR",
+            f"Frappe validation error during document creation",
+            {"error_type": "ValidationError", "error_message": str(e)}
+        )
+        draft.save()
         return {
             "success": False,
             "error": f"Validation Error: {str(e)}"
         }
     except frappe.DuplicateEntryError as e:
         # Duplicate entry errors
+        draft.add_debug_entry(
+            "DOC_CREATE_ERROR",
+            f"Duplicate entry error during document creation",
+            {"error_type": "DuplicateEntryError", "error_message": str(e)}
+        )
+        draft.save()
         return {
             "success": False,
             "error": f"Duplicate Entry: {str(e)}"
         }
     except Exception as e:
         # Log unexpected errors
+        draft.add_debug_entry(
+            "DOC_CREATE_ERROR",
+            f"Unexpected error during document creation",
+            {"error_type": type(e).__name__, "error_message": str(e)}
+        )
+        draft.save()
         frappe.log_error(f"Error creating document from draft", f"Draft ID: {draft_id}, Error: {str(e)}")
         return {
             "success": False,
@@ -1389,6 +1615,45 @@ def initialize_draft_data(draft_id, initial_data):
     except Exception as e:
         frappe.log_error(f"Error initializing draft data", f"Draft ID: {draft_id}, Error: {str(e)}")
         return {"success": False, "error": str(e)}
+
+
+def log_tool_result(draft_id, tool_name, tool_result):
+    """Log tool execution results to conversation history and debug log"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        
+        # Create a summary of the tool result for logging
+        if isinstance(tool_result, dict):
+            if tool_result.get("success"):
+                summary = tool_result.get("message", "Tool executed successfully")
+            else:
+                summary = f"Tool failed: {tool_result.get('error', 'Unknown error')}"
+        else:
+            summary = str(tool_result)
+        
+        # Log to debug log with full details
+        draft.add_debug_entry(
+            "TOOL_RESULT",
+            f"Tool '{tool_name}' result: {summary}",
+            tool_result
+        )
+        
+        # Log the tool result to conversation history
+        draft.add_message_to_conversation(
+            "system",
+            f"Tool result: {summary}",
+            {
+                "action": "tool_result",
+                "tool_name": tool_name,
+                "result": tool_result
+            }
+        )
+        
+        # Save both debug and conversation updates
+        draft.save()
+        
+    except Exception as log_error:
+        frappe.log_error(f"Error logging tool result to conversation", f"Tool: {tool_name}, Error: {str(log_error)}")
 
 
 @frappe.whitelist()

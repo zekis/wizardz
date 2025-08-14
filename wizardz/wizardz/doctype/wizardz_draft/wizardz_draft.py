@@ -62,6 +62,43 @@ class WizardzDraft(Document):
         conversation.append(message)
         self.conversation_history = json.dumps(conversation, indent=2)
     
+    def is_debug_enabled(self):
+        """Check if debug logging is enabled for this wizard configuration"""
+        try:
+            if self.wizard_config:
+                wizard_doc = frappe.get_doc("Wizardz Configuration", self.wizard_config)
+                return wizard_doc.get("debug_enabled", 0)
+        except Exception:
+            pass
+        return False
+    
+    def add_debug_entry(self, entry_type, content, details=None):
+        """Add an entry to the debug log (only if debug is enabled)"""
+        # Only log if debug is enabled
+        if not self.is_debug_enabled():
+            return
+            
+        timestamp = frappe.utils.now()
+        
+        debug_entry = f"\n[{timestamp}] {entry_type.upper()}: {content}"
+        
+        if details:
+            if isinstance(details, dict):
+                debug_entry += f"\nDetails: {json.dumps(details, indent=2)}"
+            else:
+                debug_entry += f"\nDetails: {str(details)}"
+        
+        debug_entry += "\n" + "="*80
+        
+        if self.debug_log:
+            self.debug_log += debug_entry
+        else:
+            self.debug_log = debug_entry
+    
+    def get_debug_log(self):
+        """Get the debug log content"""
+        return self.debug_log or ""
+    
     def update_draft_data(self, new_data):
         """Update the draft data with new structure"""
         if isinstance(new_data, dict):

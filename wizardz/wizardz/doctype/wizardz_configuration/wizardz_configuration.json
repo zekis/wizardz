@@ -11,6 +11,7 @@
   "column_break_3",
   "ai_model",
   "is_active",
+  "debug_enabled",
   "section_break_6",
   "system_prompt",
   "field_instructions"
@@ -55,6 +56,13 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Is Active"
+  },
+  {
+   "default": 0,
+   "description": "Enable detailed debug logging for AI interactions and tool calls",
+   "fieldname": "debug_enabled",
+   "fieldtype": "Check",
+   "label": "Debug Enabled"
   },
   {
    "fieldname": "system_prompt",

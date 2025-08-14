@@ -5,20 +5,22 @@
  "creation": "2025-08-14 00:51:00.000000",
  "doctype": "DocType",
  "engine": "InnoDB",
- "field_order": [
-  "naming_series",
-  "draft_name",
-  "column_break_3",
-  "wizard_config",
-  "target_doctype",
-  "target_document",
-  "section_break_6",
-  "draft_data",
-  "section_break_8",
-  "conversation_history",
-  "section_break_10",
-  "status"
- ],
+  "field_order": [
+   "naming_series",
+   "draft_name",
+   "column_break_3",
+   "wizard_config",
+   "target_doctype",
+   "target_document",
+   "section_break_6",
+   "draft_data",
+   "section_break_8",
+   "conversation_history",
+   "section_break_11",
+   "debug_log",
+   "section_break_10",
+   "status"
+  ],
  "fields": [
   {
    "fieldname": "naming_series",
@@ -79,6 +81,17 @@
    "fieldtype": "Long Text",
    "label": "Conversation History",
    "description": "Complete chat history for this draft"
+  },
+  {
+   "fieldname": "section_break_11",
+   "fieldtype": "Section Break",
+   "label": "Debug Information"
+  },
+  {
+   "fieldname": "debug_log",
+   "fieldtype": "Long Text",
+   "label": "Debug Log",
+   "description": "Raw AI responses, tool calls, and debugging information"
   },
   {
    "fieldname": "section_break_10",

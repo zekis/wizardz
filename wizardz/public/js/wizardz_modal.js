@@ -209,8 +209,8 @@ class WizardzModal {
                     loadingMessage.remove();
                 }
                 
-                this.updatePreview(this.doc);
-                await this.initializeDraftWithExistingData();
+                // Don't update preview with raw doc data - let it load from draft data
+                // The draft data is already populated in the backend during session start
                 this.getInitialGreeting();
             } else {
                 this.addMessage('system', 'Error starting update session: ' + response.message.error);

@@ -1,4 +1,4 @@
-# Wizardz API Reference
+no # Wizardz API Reference
 
 ## Overview
 This document provides a complete reference for the Wizardz framework API endpoints and DocType structures.

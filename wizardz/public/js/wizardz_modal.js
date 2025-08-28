@@ -15,7 +15,7 @@ class WizardzModal {
         console.log(`Wizardz: Modal constructor completed - this.action: ${this.action}`);
     }
 
-    show() {
+    async show() {
         // Create modal HTML
         const modalHtml = this.createModalHtml();
         
@@ -27,6 +27,9 @@ class WizardzModal {
         
         // Add event listeners first
         this.attachEventListeners();
+        
+        // Load and display recent drafts
+        await this.loadRecentDrafts();
         
         // Show modal with Bootstrap if available, otherwise fallback
         if (typeof $ !== 'undefined' && $.fn.modal) {
@@ -72,6 +75,15 @@ class WizardzModal {
                             </div>
                         </div>
                         <div class="modal-body" style="height: 70vh; padding: 0; background: white;">
+                            <!-- Recent Drafts Section -->
+                            <div id="wizardz-recent-drafts" style="display: none; padding: 10px; border-bottom: 1px solid #d1d8dd; background: #f8f9fa;">
+                                <div style="margin-bottom: 8px;">
+                                    <strong style="color: #36414c; font-size: 12px;">Recent ${this.doctype} Drafts:</strong>
+                                </div>
+                                <div id="wizardz-draft-buttons" style="display: flex; flex-wrap: wrap; gap: 5px;">
+                                    <!-- Draft buttons will be inserted here -->
+                                </div>
+                            </div>
                             <div class="row" style="height: 100%; margin: 0;">
                                 <!-- Preview Panel (Left) -->
                                 <div class="col-md-6" style="height: 100%; border-right: 1px solid #d1d8dd; padding: 0;">
@@ -459,12 +471,14 @@ class WizardzModal {
         previewHtml += `<h6 style="color: #36414c; margin-bottom: 15px; border-bottom: 1px solid #d1d8dd; padding-bottom: 5px;">${this.doctype} Record</h6>`;
         
         for (const [fieldName, value] of Object.entries(draftData)) {
-            if (value && value.toString().trim() && fieldName !== '_multi_doctype') {
+            if (this.shouldDisplayField(fieldName, value)) {
                 const displayName = this.formatFieldName(fieldName);
+                const formattedValue = this.formatFieldValue(value);
+                
                 previewHtml += `
                     <div class="field-preview" style="margin-bottom: 10px;">
                         <strong style="color: #6c7680; font-size: 12px; text-transform: uppercase;">${displayName}:</strong>
-                        <div style="color: #36414c; margin-top: 2px;">${this.escapeHtml(value)}</div>
+                        <div style="color: #36414c; margin-top: 2px;">${formattedValue}</div>
                     </div>
                 `;
             }
@@ -472,6 +486,95 @@ class WizardzModal {
         
         previewHtml += '</div>';
         previewContent.innerHTML = previewHtml;
+    }
+
+    shouldDisplayField(fieldName, value) {
+        // Skip system fields and empty values
+        if (fieldName === '_multi_doctype') return false;
+        if (value === null || value === undefined) return false;
+        if (typeof value === 'string' && value.trim() === '') return false;
+        if (Array.isArray(value) && value.length === 0) return false;
+        if (typeof value === 'object' && Object.keys(value).length === 0) return false;
+        
+        return true;
+    }
+
+    formatFieldValue(value) {
+        // Handle different data types for display
+        if (value === null || value === undefined) {
+            return '<em style="color: #999;">Not set</em>';
+        }
+        
+        if (typeof value === 'string') {
+            return this.escapeHtml(value);
+        }
+        
+        if (typeof value === 'number' || typeof value === 'boolean') {
+            return this.escapeHtml(String(value));
+        }
+        
+        if (Array.isArray(value)) {
+            if (value.length === 0) {
+                return '<em style="color: #999;">Empty list</em>';
+            }
+            
+            // Format array items
+            const items = value.map(item => {
+                if (typeof item === 'object' && item !== null) {
+                    return this.formatObjectForDisplay(item);
+                } else {
+                    return this.escapeHtml(String(item));
+                }
+            });
+            
+            return `
+                <div style="border-left: 2px solid #e9ecef; padding-left: 10px; margin-top: 5px;">
+                    ${items.map(item => `<div style="margin-bottom: 5px;">• ${item}</div>`).join('')}
+                </div>
+            `;
+        }
+        
+        if (typeof value === 'object' && value !== null) {
+            return this.formatObjectForDisplay(value);
+        }
+        
+        // Fallback for any other type
+        return this.escapeHtml(String(value));
+    }
+
+    formatObjectForDisplay(obj) {
+        if (!obj || typeof obj !== 'object') {
+            return this.escapeHtml(String(obj));
+        }
+        
+        const entries = Object.entries(obj);
+        if (entries.length === 0) {
+            return '<em style="color: #999;">Empty object</em>';
+        }
+        
+        // Format object as key-value pairs
+        const formattedEntries = entries.map(([key, value]) => {
+            const displayKey = this.formatFieldName(key);
+            let displayValue;
+            
+            if (typeof value === 'object' && value !== null) {
+                if (Array.isArray(value)) {
+                    displayValue = `[${value.length} items]`;
+                } else {
+                    displayValue = `{${Object.keys(value).length} fields}`;
+                }
+            } else {
+                displayValue = this.escapeHtml(String(value));
+            }
+            
+            return `<strong>${displayKey}:</strong> ${displayValue}`;
+        });
+        
+        return `
+            <div style="border-left: 2px solid #e9ecef; padding-left: 10px; margin-top: 5px; font-size: 12px;">
+                ${formattedEntries.map(entry => `<div style="margin-bottom: 3px;">${entry}</div>`).join('')}
+            </div>
+        `;
     }
 
     formatFieldName(fieldName) {
@@ -580,6 +683,238 @@ class WizardzModal {
             this.addMessage('assistant', aiResponse.message.response);
         } else {
             this.addMessage('system', '❌ Error getting AI correction: ' + aiResponse.message.error);
+        }
+    }
+
+    async loadRecentDrafts() {
+        try {
+            const response = await frappe.call({
+                method: 'wizardz.api.get_user_drafts',
+                args: {
+                    target_doctype: this.doctype,
+                    limit: 5
+                }
+            });
+
+            if (response.message && response.message.length > 0) {
+                this.displayRecentDrafts(response.message);
+            }
+        } catch (error) {
+            console.log('Wizardz: Error loading recent drafts:', error.message);
+        }
+    }
+
+    async displayRecentDrafts(drafts) {
+        const draftSection = document.getElementById('wizardz-recent-drafts');
+        const draftButtons = document.getElementById('wizardz-draft-buttons');
+        
+        if (!drafts || drafts.length === 0) {
+            draftSection.style.display = 'none';
+            return;
+        }
+
+        // Clear existing buttons
+        draftButtons.innerHTML = '';
+
+        // Create buttons for each draft with metrics
+        for (const draft of drafts) {
+            const button = document.createElement('button');
+            button.className = 'btn btn-default btn-xs';
+            button.style.cssText = 'margin-right: 5px; margin-bottom: 5px; font-size: 11px; padding: 4px 8px; min-width: 120px;';
+            
+            // Format the modified date
+            const modifiedDate = new Date(draft.modified);
+            const timeAgo = this.getTimeAgo(modifiedDate);
+            
+            // Get draft metrics
+            const metrics = await this.getDraftMetrics(draft.name);
+            
+            button.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <div style="display: flex; align-items: center;">
+                        <i class="fa fa-file-text-o" style="margin-right: 4px; color: #5e64ff;"></i>
+                        <span style="font-weight: 500;">${draft.target_doctype}</span>
+                    </div>
+                    <div style="font-size: 10px; color: #999; margin-left: 8px;">
+                        ${timeAgo}
+                    </div>
+                </div>
+                <div style="font-size: 10px; color: #666; margin-top: 2px; display: flex; gap: 8px;">
+                    <span><i class="fa fa-list" style="margin-right: 2px;"></i>${metrics.fieldCount} fields</span>
+                    <span><i class="fa fa-comments" style="margin-right: 2px;"></i>${metrics.messageCount} msgs</span>
+                </div>
+            `;
+            
+            button.title = `Resume ${draft.target_doctype} draft\nStatus: ${draft.status}\nFields: ${metrics.fieldCount}\nMessages: ${metrics.messageCount}\nLast modified: ${modifiedDate.toLocaleString()}`;
+            
+            button.addEventListener('click', () => {
+                this.resumeDraft(draft);
+            });
+            
+            draftButtons.appendChild(button);
+        }
+
+        // Show the draft section
+        draftSection.style.display = 'block';
+    }
+
+    async getDraftMetrics(draftId) {
+        try {
+            const response = await frappe.call({
+                method: 'wizardz.api.get_draft_data',
+                args: {
+                    draft_id: draftId
+                }
+            });
+
+            if (response.message.success) {
+                const draftData = response.message.draft_data || {};
+                const conversation = response.message.conversation || [];
+                
+                // Count fields (excluding system fields)
+                const fieldCount = Object.keys(draftData).filter(key => 
+                    key !== '_multi_doctype' && 
+                    draftData[key] !== null && 
+                    draftData[key] !== undefined && 
+                    draftData[key] !== ''
+                ).length;
+                
+                // Count user and assistant messages (exclude system messages)
+                const messageCount = conversation.filter(msg => 
+                    msg.type === 'user' || msg.type === 'assistant'
+                ).length;
+                
+                return {
+                    fieldCount: fieldCount,
+                    messageCount: messageCount
+                };
+            }
+        } catch (error) {
+            console.log('Wizardz: Error getting draft metrics:', error.message);
+        }
+        
+        // Fallback metrics
+        return {
+            fieldCount: 0,
+            messageCount: 0
+        };
+    }
+
+    getTimeAgo(date) {
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return 'just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        return date.toLocaleDateString();
+    }
+
+    async resumeDraft(draft) {
+        try {
+            // Show loading message
+            const messagesContainer = document.querySelector('.chat-messages');
+            messagesContainer.innerHTML = `
+                <div class="loading-message" style="color: #6c7680;">
+                    <i class="fa fa-spinner fa-spin"></i> Loading draft conversation...
+                </div>
+            `;
+
+            // Disable input while loading
+            this.disableInput();
+
+            // Get draft data and conversation history
+            const response = await frappe.call({
+                method: 'wizardz.api.get_draft_data',
+                args: {
+                    draft_id: draft.name
+                }
+            });
+
+            if (response.message.success) {
+                // Set draft ID and mark as existing
+                this.draftId = draft.name;
+                this.isExistingDraft = true;
+
+                // Clear loading message
+                const loadingMessage = document.querySelector('.loading-message');
+                if (loadingMessage) {
+                    loadingMessage.remove();
+                }
+
+                // Load conversation history
+                const conversation = response.message.conversation || [];
+                conversation.forEach(msg => {
+                    if (msg.type === 'user' || msg.type === 'assistant') {
+                        this.addMessage(msg.type, msg.content);
+                    }
+                });
+
+                // Update preview with draft data
+                if (response.message.draft_data) {
+                    this.updatePreview(response.message.draft_data);
+                }
+
+                // Update button for current status
+                this.updateButtonForMode(response.message.status);
+
+                // Hide draft section after selection
+                const draftSection = document.getElementById('wizardz-recent-drafts');
+                draftSection.style.display = 'none';
+
+                // Show success message
+                this.addMessage('system', `✅ Resumed draft: ${draft.draft_name}`);
+
+                // Put the ball back in AI's court - send a continuation message
+                await this.continueConversation();
+
+            } else {
+                this.addMessage('system', 'Error loading draft: ' + response.message.error);
+                // Fall back to starting a new session
+                await this.startSession();
+            }
+
+        } catch (error) {
+            this.addMessage('system', 'Error resuming draft: ' + error.message);
+            // Fall back to starting a new session
+            await this.startSession();
+        }
+    }
+
+    async continueConversation() {
+        try {
+            // Send a continuation message to the AI to resume the conversation
+            const response = await frappe.call({
+                method: 'wizardz.api.send_message',
+                args: {
+                    draft_id: this.draftId,
+                    message: "The user has resumed this conversation. Please continue where we left off. Review the current draft data and either ask for the next piece of information needed, or if all required information is complete, let the user know they can create the document.",
+                    message_type: "system"
+                }
+            });
+
+            if (response.message.success) {
+                this.addMessage('assistant', response.message.response);
+                
+                if (response.message.draft_data) {
+                    this.updatePreview(response.message.draft_data);
+                }
+                
+                this.updateButtonForMode(response.message.draft_status);
+                
+                // Enable input after AI responds
+                this.enableInput();
+            } else {
+                this.addMessage('system', 'Error continuing conversation: ' + response.message.error);
+                this.enableInput();
+            }
+        } catch (error) {
+            this.addMessage('system', 'Error continuing conversation: ' + error.message);
+            this.enableInput();
         }
     }
 

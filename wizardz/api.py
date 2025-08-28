@@ -223,7 +223,7 @@ def get_ai_response(draft, wizard_config, user_message):
         # Don't save here - will save after AI response
         
         # AI-Tool execution loop
-        max_iterations = 5  # Prevent infinite loops
+        max_iterations = 50  # Increased to handle more tool iterations
         iteration = 0
         
         while iteration < max_iterations:
@@ -270,6 +270,9 @@ def get_ai_response(draft, wizard_config, user_message):
             # Parse and execute tool calls
             tool_result = parse_and_execute_tools(ai_response, draft.name)
             
+            # Add AI response to conversation history
+            messages.append({"role": "assistant", "content": ai_response})
+            
             if tool_result["has_tools"]:
                 # Add AI response to conversation
                 messages.append({"role": "assistant", "content": ai_response})
@@ -281,17 +284,219 @@ def get_ai_response(draft, wizard_config, user_message):
                 if tool_result.get("user_message"):
                     return tool_result["user_message"]
                 
+                # For all other tools, add results back to AI and continue loop
+                tool_results_message = f"Tool Results: {json.dumps(tool_result['results'], cls=DateTimeEncoder)}"
+                messages.append({"role": "system", "content": tool_results_message})
+                
                 # Continue loop to get next AI response
                 continue
+                
             else:
-                # No tools found, return AI response directly
-                return ai_response
+                # No tools found - this is an error because AI must always use tools
+                error_message = "ERROR: You must use a tool in every response. You provided a plain text response instead of a JSON tool call. Please use the ask_user tool to ask questions or other appropriate tools to save data. Format: {\"tool\": \"tool_name\", \"parameters\": {...}}"
+                
+                # Log the error
+                draft.add_debug_entry(
+                    "AI_ERROR_NO_TOOL",
+                    f"AI failed to use tool (iteration {iteration})",
+                    {
+                        "iteration": iteration,
+                        "ai_response": ai_response,
+                        "error": "No tool call found in AI response"
+                    }
+                )
+                
+                # Send error back to AI to try again
+                messages.append({"role": "system", "content": error_message})
+                
+                # Continue loop to get corrected AI response
+                continue
         
-        return "Maximum tool execution iterations reached. Please try again."
+        # If we reach here, we've exceeded max iterations
+        return "Maximum tool execution iterations reached. The AI assistant encountered repeated errors. Please try starting a new conversation."
         
     except Exception as e:
         frappe.log_error(f"Error getting AI response",f"{str(e)}")
         return f"Error getting AI response: {str(e)}"
+
+
+def get_tools_for_doctype(target_doctype):
+    """Get tools available for specific DocType"""
+    # Base tools available for all DocTypes
+    base_tools = [
+        {
+            "name": "ask_user",
+            "description": "Ask the user a question - REQUIRED for all user interactions",
+            "parameters": "question (string), context (optional string)",
+            "example": "{\"tool\": \"ask_user\", \"parameters\": {\"question\": \"What is the customer name?\", \"context\": \"collecting_basic_info\"}}"
+        },
+        {
+            "name": "update_draft_field",
+            "description": "Update or add a specific field in the draft data",
+            "parameters": "field_name (string), field_value (any), action (optional: 'add', 'update', 'remove')",
+            "example": "{\"tool\": \"update_draft_field\", \"parameters\": {\"field_name\": \"customer_name\", \"field_value\": \"Test Customer 2\", \"action\": \"add\"}}"
+        },
+        {
+            "name": "update_multiple_fields",
+            "description": "Update multiple specific fields in the draft data without overwriting existing data",
+            "parameters": "field_updates (object with field names and values)",
+            "example": "{\"tool\": \"update_multiple_fields\", \"parameters\": {\"field_updates\": {\"customer_name\": \"Test Customer 2\", \"customer_type\": \"Company\"}}}"
+        },
+        {
+            "name": "get_draft_data",
+            "description": "Retrieve current draft data",
+            "parameters": "draft_id",
+            "example": "{\"tool\": \"get_draft_data\", \"parameters\": {\"draft_id\": \"DRAFT-001\"}}"
+        },
+        {
+            "name": "get_doctype_schema",
+            "description": "Get detailed schema information for any DocType",
+            "parameters": "doctype_name",
+            "example": "{\"tool\": \"get_doctype_schema\", \"parameters\": {\"doctype_name\": \"Customer\"}}"
+        },
+        {
+            "name": "search_documents",
+            "description": "Search for existing documents to check for duplicates before creating new ones. Returns documents with both system names (IDs) and user-friendly display names for better identification.",
+            "parameters": "doctype (string), search_fields (array of field names), search_term (string), limit (optional, default 10)",
+            "example": "{\"tool\": \"search_documents\", \"parameters\": {\"doctype\": \"Customer\", \"search_fields\": [\"customer_name\", \"email_id\"], \"search_term\": \"EAC Systems\", \"limit\": 5}}",
+            "note": "Use the ai_summary field in the response to get human-readable document names. When referencing documents to users, use the display names from ai_summary.documents_found."
+        },
+        {
+            "name": "set_update_mode",
+            "description": "Switch wizard from create mode to update mode for an existing document",
+            "parameters": "document_name (string), reason (optional string explaining why switching to update)",
+            "example": "{\"tool\": \"set_update_mode\", \"parameters\": {\"document_name\": \"Bob Smith\", \"reason\": \"Customer already exists, user wants to update\"}}"
+        },
+        {
+            "name": "add_dependent_doctype",
+            "description": "Add a dependent DocType that needs to be created before the main document",
+            "parameters": "doctype (string), dependency_reason (string), priority (optional int, default 1)",
+            "example": "{\"tool\": \"add_dependent_doctype\", \"parameters\": {\"doctype\": \"Customer\", \"dependency_reason\": \"Customer 'TechStart Solutions' does not exist and is required for Project\", \"priority\": 1}}"
+        },
+        {
+            "name": "update_doctype_field",
+            "description": "Update a field for a specific DocType in the multi-doctype draft",
+            "parameters": "doctype (string), field_name (string), field_value (any), action (optional: 'add', 'update', 'remove')",
+            "example": "{\"tool\": \"update_doctype_field\", \"parameters\": {\"doctype\": \"Customer\", \"field_name\": \"customer_name\", \"field_value\": \"TechStart Solutions\", \"action\": \"add\"}}"
+        },
+        {
+            "name": "get_creation_order",
+            "description": "Get the order in which DocTypes should be created based on dependencies",
+            "parameters": "draft_id (string)",
+            "example": "{\"tool\": \"get_creation_order\", \"parameters\": {\"draft_id\": \"DRAFT-001\"}}"
+        },
+        {
+            "name": "add_child_table_row",
+            "description": "Add a row to a child table field",
+            "parameters": "table_field_name (string), row_data (object with field names and values)",
+            "example": "{\"tool\": \"add_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_data\": {\"item_code\": \"ITEM-001\", \"qty\": 5, \"rate\": 100}}}"
+        },
+        {
+            "name": "update_child_table_row",
+            "description": "Update a specific row in a child table field",
+            "parameters": "table_field_name (string), row_index (int), row_data (object with field names and values)",
+            "example": "{\"tool\": \"update_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_index\": 0, \"row_data\": {\"qty\": 10, \"rate\": 120}}}"
+        },
+        {
+            "name": "remove_child_table_row",
+            "description": "Remove a row from a child table field",
+            "parameters": "table_field_name (string), row_index (int)",
+            "example": "{\"tool\": \"remove_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_index\": 1}}"
+        },
+        {
+            "name": "get_child_table_schema",
+            "description": "Get the schema of a child table (Table fieldtype)",
+            "parameters": "child_doctype_name (string)",
+            "example": "{\"tool\": \"get_child_table_schema\", \"parameters\": {\"child_doctype_name\": \"Sales Order Item\"}}"
+        }
+    ]
+
+    # Add Todo-specific tools
+    if target_doctype == "Todo":
+        todo_tools = [
+            {
+                "name": "analyze_todo_complexity",
+                "description": "Analyze if a todo is complex enough to warrant breaking down into subtasks",
+                "parameters": "todo_data (object with title, description, etc.), context (optional string)",
+                "example": "{\"tool\": \"analyze_todo_complexity\", \"parameters\": {\"todo_data\": {\"title\": \"Build Customer Portal\", \"description\": \"Create a web portal with authentication, dashboard, and profile management\"}}}"
+            },
+            {
+                "name": "suggest_subtask_breakdown",
+                "description": "Analyze a todo and suggest how it could be broken down into subtasks",
+                "parameters": "todo_description (string), estimated_hours (optional int), complexity_indicators (optional array)",
+                "example": "{\"tool\": \"suggest_subtask_breakdown\", \"parameters\": {\"todo_description\": \"Build customer portal with authentication and dashboard\", \"estimated_hours\": 40}}"
+            },
+            {
+                "name": "ask_subtask_breakdown",
+                "description": "Ask user if they want to break down the todo into subtasks with suggested breakdown",
+                "parameters": "todo_summary (string), suggested_subtasks (array of subtask objects), reasoning (optional string)",
+                "example": "{\"tool\": \"ask_subtask_breakdown\", \"parameters\": {\"todo_summary\": \"Build Customer Portal\", \"suggested_subtasks\": [{\"title\": \"Design UI\", \"description\": \"Create wireframes\"}, {\"title\": \"Backend API\", \"description\": \"Build REST endpoints\"}], \"reasoning\": \"This is a complex project that would benefit from breaking down into phases\"}}"
+            },
+            {
+                "name": "create_subtasks",
+                "description": "Create parent todo and multiple related subtasks in the multi-doctype structure",
+                "parameters": "parent_todo_data (object), subtasks (array of subtask objects)",
+                "example": "{\"tool\": \"create_subtasks\", \"parameters\": {\"parent_todo_data\": {\"title\": \"Build Portal\", \"description\": \"Main project\", \"priority\": \"High\"}, \"subtasks\": [{\"title\": \"Design UI\", \"description\": \"Create wireframes\", \"estimated_hours\": 8}, {\"title\": \"Backend API\", \"description\": \"Build REST endpoints\", \"estimated_hours\": 16}]}}"
+            }
+        ]
+        base_tools.extend(todo_tools)
+
+    # Define critical rules (add Todo-specific rules if applicable)
+    critical_rules = [
+        "You MUST use a tool in every response - no exceptions",
+        "To ask questions, use ask_user tool",
+        "To search for duplicates, use search_documents tool",
+        "To save data, use update_draft_field or update_multiple_fields tools ONLY",
+        "Save data after every answer to avoid data loss",
+        "When you have sufficient information, tell the user to click the 'Create [DocType]' or 'Update [DocType]' button to finalize the document",
+        "Never respond without using a tool"
+    ]
+
+    if target_doctype == "Todo":
+        critical_rules.extend([
+            "For complex todos (>8 hours estimated or multiple distinct phases), analyze complexity and suggest subtask breakdown",
+            "Always ask user before creating subtasks - never assume they want them",
+            "When creating subtasks, ensure each has clear, actionable descriptions and realistic time estimates"
+        ])
+
+    return {
+        "available_tools": base_tools,
+        "critical_rules": critical_rules,
+        "instructions": "MANDATORY: Every response must be valid JSON with a tool call. Use this exact format: {\"tool\": \"ask_user\", \"parameters\": {\"draft_id\": \"...\", \"question\": \"...\"}}. Never provide plain text responses."
+    }
+
+
+def get_todo_specific_instructions():
+    """Get Todo-specific system instructions"""
+    return """
+## Todo Subtask Management Guidelines:
+
+### When to Suggest Subtasks:
+- Todo has estimated time > 8 hours OR description mentions multiple distinct phases/components
+- Keywords indicating complexity: "build", "implement", "create system", "develop", "design and build"
+- Multiple action verbs or deliverables mentioned
+- Project-like scope (mentions multiple technologies, integrations, or user stories)
+
+### Subtask Creation Best Practices:
+- Each subtask should be completable in 1-8 hours
+- Subtasks should have clear, actionable titles (start with action verbs)
+- Include specific deliverables in subtask descriptions
+- Maintain logical sequence/dependencies between subtasks
+- Ensure subtasks collectively complete the parent todo
+
+### Workflow:
+1. Collect basic todo information (title, description, priority, due_date)
+2. Use analyze_todo_complexity to determine if subtasks would be beneficial
+3. If complex, use suggest_subtask_breakdown to generate suggestions
+4. Use ask_subtask_breakdown to present options to user
+5. If user agrees, use create_subtasks to create parent + subtasks structure
+
+### Parent-Subtask Relationship:
+- Parent todo represents the overall project/goal
+- Subtasks reference parent via parent_todo field
+- Each subtask should be independently actionable
+- Progress on parent is derived from subtask completion
+"""
 
 
 def build_base_messages(draft, wizard_config):
@@ -317,110 +522,22 @@ def build_base_messages(draft, wizard_config):
             "content": f"DocType Schema for {draft.target_doctype}: {json.dumps(doctype_context, indent=2, cls=DateTimeEncoder)}"
         })
     
-    # Add available tools information
-    tools_info = {
-        "available_tools": [
-            {
-                "name": "ask_user",
-                "description": "Ask the user a question - REQUIRED for all user interactions",
-                "parameters": "draft_id (string), question (string), context (optional string)",
-                "example": "{\"tool\": \"ask_user\", \"parameters\": {\"draft_id\": \"DRAFT-001\", \"question\": \"What is the customer name?\", \"context\": \"collecting_basic_info\"}}"
-            },
-            {
-                "name": "update_draft_field",
-                "description": "Update or add a specific field in the draft data",
-                "parameters": "field_name (string), field_value (any), action (optional: 'add', 'update', 'remove')",
-                "example": "{\"tool\": \"update_draft_field\", \"parameters\": {\"field_name\": \"customer_name\", \"field_value\": \"Test Customer 2\", \"action\": \"add\"}}"
-            },
-            {
-                "name": "update_multiple_fields",
-                "description": "Update multiple specific fields in the draft data without overwriting existing data",
-                "parameters": "field_updates (object with field names and values)",
-                "example": "{\"tool\": \"update_multiple_fields\", \"parameters\": {\"field_updates\": {\"customer_name\": \"Test Customer 2\", \"customer_type\": \"Company\"}}}"
-            },
-            {
-                "name": "get_draft_data", 
-                "description": "Retrieve current draft data",
-                "parameters": "draft_id",
-                "example": "{\"tool\": \"get_draft_data\", \"parameters\": {\"draft_id\": \"DRAFT-001\"}}"
-            },
-            {
-                "name": "get_doctype_schema",
-                "description": "Get detailed schema information for any DocType",
-                "parameters": "doctype_name",
-                "example": "{\"tool\": \"get_doctype_schema\", \"parameters\": {\"doctype_name\": \"Customer\"}}"
-            },
-            {
-                "name": "search_documents",
-                "description": "Search for existing documents to check for duplicates before creating new ones",
-                "parameters": "doctype (string), search_fields (array of field names), search_term (string), limit (optional, default 10)",
-                "example": "{\"tool\": \"search_documents\", \"parameters\": {\"doctype\": \"Customer\", \"search_fields\": [\"customer_name\", \"email_id\"], \"search_term\": \"EAC Systems\", \"limit\": 5}}"
-            },
-            {
-                "name": "set_update_mode",
-                "description": "Switch wizard from create mode to update mode for an existing document",
-                "parameters": "document_name (string), reason (optional string explaining why switching to update)",
-                "example": "{\"tool\": \"set_update_mode\", \"parameters\": {\"document_name\": \"Bob Smith\", \"reason\": \"Customer already exists, user wants to update\"}}"
-            },
-            {
-                "name": "add_dependent_doctype",
-                "description": "Add a dependent DocType that needs to be created before the main document",
-                "parameters": "doctype (string), dependency_reason (string), priority (optional int, default 1)",
-                "example": "{\"tool\": \"add_dependent_doctype\", \"parameters\": {\"doctype\": \"Customer\", \"dependency_reason\": \"Customer 'TechStart Solutions' does not exist and is required for Project\", \"priority\": 1}}"
-            },
-            {
-                "name": "update_doctype_field",
-                "description": "Update a field for a specific DocType in the multi-doctype draft",
-                "parameters": "doctype (string), field_name (string), field_value (any), action (optional: 'add', 'update', 'remove')",
-                "example": "{\"tool\": \"update_doctype_field\", \"parameters\": {\"doctype\": \"Customer\", \"field_name\": \"customer_name\", \"field_value\": \"TechStart Solutions\", \"action\": \"add\"}}"
-            },
-            {
-                "name": "get_creation_order",
-                "description": "Get the order in which DocTypes should be created based on dependencies",
-                "parameters": "draft_id (string)",
-                "example": "{\"tool\": \"get_creation_order\", \"parameters\": {\"draft_id\": \"DRAFT-001\"}}"
-            },
-            {
-                "name": "add_child_table_row",
-                "description": "Add a row to a child table field",
-                "parameters": "table_field_name (string), row_data (object with field names and values)",
-                "example": "{\"tool\": \"add_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_data\": {\"item_code\": \"ITEM-001\", \"qty\": 5, \"rate\": 100}}}"
-            },
-            {
-                "name": "update_child_table_row",
-                "description": "Update a specific row in a child table field",
-                "parameters": "table_field_name (string), row_index (int), row_data (object with field names and values)",
-                "example": "{\"tool\": \"update_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_index\": 0, \"row_data\": {\"qty\": 10, \"rate\": 120}}}"
-            },
-            {
-                "name": "remove_child_table_row",
-                "description": "Remove a row from a child table field",
-                "parameters": "table_field_name (string), row_index (int)",
-                "example": "{\"tool\": \"remove_child_table_row\", \"parameters\": {\"table_field_name\": \"items\", \"row_index\": 1}}"
-            },
-            {
-                "name": "get_child_table_schema",
-                "description": "Get the schema of a child table (Table fieldtype)",
-                "parameters": "child_doctype_name (string)",
-                "example": "{\"tool\": \"get_child_table_schema\", \"parameters\": {\"child_doctype_name\": \"Sales Order Item\"}}"
-            }
-        ],
-        "critical_rules": [
-            "You MUST use a tool in every response - no exceptions",
-            "To ask questions, use ask_user tool",
-            "To search for duplicates, use search_documents tool", 
-            "To save data, use update_draft_field or update_multiple_fields tools ONLY",
-            "Save data after every answer to avoid data loss",
-            "When you have sufficient information, tell the user to click the 'Create [DocType]' or 'Update [DocType]' button to finalize the document",
-            "Never respond without using a tool"
-        ],
-        "instructions": "MANDATORY: Every response must be valid JSON with a tool call. Use this exact format: {\"tool\": \"ask_user\", \"parameters\": {\"draft_id\": \"...\", \"question\": \"...\"}}. Never provide plain text responses."
-    }
+    # Add available tools information (conditionally based on DocType)
+    tools_info = get_tools_for_doctype(draft.target_doctype)
+
     messages.append({
         "role": "system",
         "content": f"Available Tools: {json.dumps(tools_info, indent=2, cls=DateTimeEncoder)}"
     })
-    
+
+    # Add Todo-specific instructions if applicable
+    if draft.target_doctype == "Todo":
+        todo_instructions = get_todo_specific_instructions()
+        messages.append({
+            "role": "system",
+            "content": f"Todo Management Instructions: {todo_instructions}"
+        })
+
     # Add field instructions if available (optional context)
     field_instructions = wizard_config.get_field_instructions_dict()
     if field_instructions:
@@ -522,6 +639,12 @@ def generate_base_system_prompt(target_doctype):
 - When duplicates are found, offer to switch to update mode using set_update_mode
 - Never respond with plain text - always use JSON tool format
 
+## Document Display Guidelines:
+- When referencing existing documents to users, ALWAYS use the display names from search results
+- If search_documents returns an ai_summary, use the documents_found list for user-friendly names
+- For documents with UUID-like names, the display_name will show meaningful titles instead of cryptic IDs
+- Example: Instead of saying "Found document 550e8400-e29b-41d4-a716-446655440000", say "Found document 'John Smith Customer Profile (550e8400...)'"
+
 Start by greeting the user and asking for the primary information needed to create or update the {target_doctype} record."""
 
 
@@ -615,35 +738,83 @@ def parse_and_execute_tools(ai_response, draft_id):
             search_term = parameters.get("search_term", "")
             limit = parameters.get("limit", 10)
             
-            tool_result = search_documents(doctype, search_fields, search_term, limit)
-            result["results"]["search_documents"] = tool_result
-            
-            # Log tool result
-            log_tool_result(draft_id, tool_name, tool_result)
-            return result
+            try:
+                tool_result = search_documents(doctype, search_fields, search_term, limit)
+
+                # Enhance the result for AI consumption with better formatting
+                if tool_result.get("success") and tool_result.get("documents"):
+                    enhanced_result = tool_result.copy()
+
+                    # Create a summary for the AI that includes display names
+                    document_summaries = []
+                    for doc in tool_result["documents"]:
+                        display_name = doc.get("display_name", doc.get("name"))
+                        system_name = doc.get("name")
+
+                        # Create a summary that shows both display name and system name
+                        if display_name != system_name:
+                            summary = f"'{display_name}' (ID: {system_name})"
+                        else:
+                            summary = f"'{display_name}'"
+
+                        document_summaries.append(summary)
+
+                    # Add a human-readable summary for the AI
+                    enhanced_result["ai_summary"] = {
+                        "found_count": len(document_summaries),
+                        "documents_found": document_summaries,
+                        "message": f"Found {len(document_summaries)} {doctype} document(s)" +
+                                (f" matching '{search_term}'" if search_term else " (most recent)")
+                    }
+
+                    result["results"]["search_documents"] = enhanced_result
+                else:
+                    result["results"]["search_documents"] = tool_result
+
+                # Log tool result
+                log_tool_result(draft_id, tool_name, tool_result)
+                # Continue AI loop - don't return to frontend
+            except Exception as e:
+                # Tool failed - create error result and continue AI loop
+                error_result = {"success": False, "error": str(e)}
+                result["results"]["search_documents"] = error_result
+                log_tool_result(draft_id, tool_name, error_result)
+                # Continue AI loop with error - don't return to frontend
             
         elif tool_name == "update_draft_field":
             field_name = parameters.get("field_name", "")
             field_value = parameters.get("field_value", "")
             action = parameters.get("action", "update")
             
-            tool_result = update_draft_field(draft_id, field_name, field_value, action)
-            result["results"]["update_draft_field"] = tool_result
+            try:
+                tool_result = update_draft_field(draft_id, field_name, field_value, action)
+                result["results"]["update_draft_field"] = tool_result
             
-            # Log tool result
-            log_tool_result(draft_id, tool_name, tool_result)
-            return result
+                # Log tool result
+                log_tool_result(draft_id, tool_name, tool_result)
+            except Exception as e:
+                # Tool failed - create error result and continue AI loop
+                error_result = {"success": False, "error": str(e)}
+                result["results"]["update_draft_field"] = error_result
+                log_tool_result(draft_id, tool_name, error_result)
+                # Continue AI loop with error - don't return to frontend
             
         elif tool_name == "update_multiple_fields":
             field_updates = parameters.get("field_updates", {})
             
-            tool_result = update_multiple_fields(draft_id, field_updates)
-            result["results"]["update_multiple_fields"] = tool_result
+            try:
+                tool_result = update_multiple_fields(draft_id, field_updates)
+                result["results"]["update_multiple_fields"] = tool_result
             
-            # Log tool result
-            log_tool_result(draft_id, tool_name, tool_result)
-            return result
-            
+                # Log tool result
+                log_tool_result(draft_id, tool_name, tool_result)
+
+            except Exception as e:
+                # Tool failed - create error result and continue AI loop
+                error_result = {"success": False, "error": str(e)}
+                result["results"]["update_multiple_fields"] = error_result
+                log_tool_result(draft_id, tool_name, error_result)
+                # Continue AI loop with error - don't return to frontend
             
         elif tool_name == "get_draft_data":
             tool_result = get_draft_data(draft_id)
@@ -651,7 +822,7 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             # Log tool result
             log_tool_result(draft_id, tool_name, tool_result)
-            return result
+            # Continue AI loop - don't return to frontend
             
         elif tool_name == "get_doctype_schema":
             doctype_name = parameters.get("doctype_name", "")
@@ -661,7 +832,7 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             # Log tool result
             log_tool_result(draft_id, tool_name, tool_result)
-            return result
+            # Continue AI loop - don't return to frontend
             
         elif tool_name == "set_update_mode":
             document_name = parameters.get("document_name", "")
@@ -672,7 +843,7 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             # Log tool result
             log_tool_result(draft_id, tool_name, tool_result)
-            return result
+            # Continue AI loop - don't return to frontend
             
         elif tool_name == "add_dependent_doctype":
             doctype = parameters.get("doctype", "")
@@ -684,7 +855,7 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             # Log tool result
             log_tool_result(draft_id, tool_name, tool_result)
-            return result
+            # Continue AI loop - don't return to frontend
             
         elif tool_name == "update_doctype_field":
             doctype = parameters.get("doctype", "")
@@ -697,18 +868,69 @@ def parse_and_execute_tools(ai_response, draft_id):
             
             # Log tool result
             log_tool_result(draft_id, tool_name, tool_result)
-            return result
+            # Continue AI loop - don't return to frontend
             
         elif tool_name == "get_creation_order":
             tool_result = get_creation_order(draft_id)
             result["results"]["get_creation_order"] = tool_result
-            
+
             # Log tool result
             log_tool_result(draft_id, tool_name, tool_result)
             return result
-            
+
+        # Todo-specific tools
+        elif tool_name == "analyze_todo_complexity":
+            todo_data = parameters.get("todo_data", {})
+            context = parameters.get("context", "")
+
+            tool_result = analyze_todo_complexity(draft_id, todo_data, context)
+            result["results"]["analyze_todo_complexity"] = tool_result
+
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
+            return result
+
+        elif tool_name == "suggest_subtask_breakdown":
+            todo_description = parameters.get("todo_description", "")
+            estimated_hours = parameters.get("estimated_hours")
+            complexity_indicators = parameters.get("complexity_indicators", [])
+
+            tool_result = suggest_subtask_breakdown(draft_id, todo_description, estimated_hours, complexity_indicators)
+            result["results"]["suggest_subtask_breakdown"] = tool_result
+
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
+            return result
+
+        elif tool_name == "ask_subtask_breakdown":
+            todo_summary = parameters.get("todo_summary", "")
+            suggested_subtasks = parameters.get("suggested_subtasks", [])
+            reasoning = parameters.get("reasoning", "")
+
+            tool_result = ask_subtask_breakdown(draft_id, todo_summary, suggested_subtasks, reasoning)
+            result["results"]["ask_subtask_breakdown"] = tool_result
+            result["user_message"] = tool_result.get("question", "")  # Return question to frontend
+
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
+            return result
+
+        elif tool_name == "create_subtasks":
+            parent_todo_data = parameters.get("parent_todo_data", {})
+            subtasks = parameters.get("subtasks", [])
+
+            tool_result = create_subtasks(draft_id, parent_todo_data, subtasks)
+            result["results"]["create_subtasks"] = tool_result
+
+            # Log tool result
+            log_tool_result(draft_id, tool_name, tool_result)
+            return result
+
         else:
             raise ValueError(f"Unknown tool: {tool_name}")
+        
+        # Return result to continue AI loop for all tools except ask_user
+        return result
             
     except (json.JSONDecodeError, ValueError, KeyError) as e:
         # If JSON parsing fails, return as no tools found so the loop exits
@@ -1168,30 +1390,89 @@ def create_document_from_draft(draft_id):
             
             # Insert the document
             new_doc.insert()
-            
+
             # Log successful creation
             draft.add_debug_entry(
                 "DOC_CREATE_SUCCESS",
                 f"Document created successfully: {new_doc.name}",
                 {"document_name": new_doc.name, "doctype": draft.target_doctype}
             )
-            
+
+            # Handle Todo subtasks if this is a multi-doctype Todo creation
+            created_subtasks = []
+            if (draft.target_doctype == "Todo" and
+                "_multi_doctype" in draft_data and
+                "doctypes" in draft_data["_multi_doctype"] and
+                "Todo" in draft_data["_multi_doctype"]["doctypes"]):
+
+                subtasks_data = draft_data["_multi_doctype"]["doctypes"]["Todo"]
+
+                draft.add_debug_entry(
+                    "SUBTASK_CREATE_START",
+                    f"Creating {len(subtasks_data)} subtasks for parent todo: {new_doc.name}",
+                    {"parent_todo": new_doc.name, "subtasks_count": len(subtasks_data)}
+                )
+
+                for i, subtask_data in enumerate(subtasks_data):
+                    try:
+                        # Create subtask document
+                        subtask_doc = frappe.get_doc({
+                            "doctype": "Todo",
+                            **subtask_data
+                        })
+
+                        # Replace placeholder with actual parent todo name
+                        if hasattr(subtask_doc, 'parent_todo') and subtask_doc.parent_todo == "{{PARENT_TODO_NAME}}":
+                            subtask_doc.parent_todo = new_doc.name
+
+                        # Insert subtask
+                        subtask_doc.insert()
+                        created_subtasks.append(subtask_doc.name)
+
+                        draft.add_debug_entry(
+                            "SUBTASK_CREATED",
+                            f"Subtask created: {subtask_doc.name}",
+                            {"subtask_name": subtask_doc.name, "parent_todo": new_doc.name, "order": i+1}
+                        )
+
+                    except Exception as subtask_error:
+                        draft.add_debug_entry(
+                            "SUBTASK_ERROR",
+                            f"Error creating subtask {i+1}: {str(subtask_error)}",
+                            {"subtask_data": subtask_data, "error": str(subtask_error)}
+                        )
+                        # Continue with other subtasks even if one fails
+                        continue
+
             # Update draft status
             draft.status = "Completed"
             draft.save()
-            
+
+            # Create success message
+            success_message = f"Document created successfully: {new_doc.name}"
+            if created_subtasks:
+                success_message += f" with {len(created_subtasks)} subtasks"
+
             # Add success message to conversation
             draft.add_message_to_conversation(
                 "system",
-                f"Document created successfully: {new_doc.name}",
-                {"action": "document_created", "document_name": new_doc.name}
+                success_message,
+                {
+                    "action": "document_created",
+                    "document_name": new_doc.name,
+                    "subtasks_created": created_subtasks,
+                    "subtasks_count": len(created_subtasks)
+                }
             )
             draft.save()
-            
+
             return {
                 "success": True,
                 "document_name": new_doc.name,
-                "message": f"{draft.target_doctype} '{new_doc.name}' created successfully"
+                "message": f"{draft.target_doctype} '{new_doc.name}' created successfully" +
+                          (f" with {len(created_subtasks)} subtasks" if created_subtasks else ""),
+                "subtasks_created": created_subtasks,
+                "subtasks_count": len(created_subtasks)
             }
         
     except frappe.ValidationError as e:
@@ -1316,10 +1597,20 @@ def validate_and_convert_field_value(field_meta, field_value, field_name):
             return str(field_value)
         
         elif field_type == 'Link':
-            # Validate that linked document exists
+            # Validate that linked document exists and provide meaningful error messages
             link_doctype = field_meta.options
             if link_doctype and not frappe.db.exists(link_doctype, field_value):
-                raise ValueError(f"Linked document '{field_value}' does not exist in {link_doctype}")
+                # Try to find similar documents to suggest alternatives
+                similar_docs = search_documents(link_doctype, [], "", limit=5)
+                if similar_docs.get("success") and similar_docs.get("documents"):
+                    suggestions = []
+                    for doc in similar_docs["documents"][:3]:  # Show top 3 suggestions
+                        suggestions.append(doc.get("display_name", doc.get("name")))
+                    suggestion_text = f". Available options include: {', '.join(suggestions)}"
+                else:
+                    suggestion_text = f". Please check the {link_doctype} list for valid options."
+
+                raise ValueError(f"Linked document '{field_value}' does not exist in {link_doctype}{suggestion_text}")
             return str(field_value)
         
         elif field_type == 'Select':
@@ -1557,13 +1848,22 @@ def get_creation_order(draft_id):
 
 
 @frappe.whitelist()
-def get_user_drafts():
-    """Get drafts created by current user"""
+def get_user_drafts(target_doctype=None, limit=5):
+    """Get drafts created by current user, optionally filtered by doctype"""
+    filters = {"owner": frappe.session.user}
+    
+    if target_doctype:
+        filters["target_doctype"] = target_doctype
+    
+    # Only show drafts that are not completed
+    filters["status"] = ["!=", "Completed"]
+    
     drafts = frappe.get_all(
         "Wizardz Draft",
-        filters={"owner": frappe.session.user},
+        filters=filters,
         fields=["name", "draft_name", "target_doctype", "status", "modified"],
-        order_by="modified desc"
+        order_by="modified desc",
+        limit=limit
     )
     
     return drafts
@@ -1671,7 +1971,13 @@ def search_documents(doctype, search_fields, search_term, limit=10):
     try:
         if not frappe.db.exists("DocType", doctype):
             return {"success": False, "error": f"DocType '{doctype}' does not exist"}
-        
+
+        # Get the best fields to fetch for display purposes
+        display_fields = get_display_fields_for_doctype(doctype)
+
+        # Combine search fields with display fields, removing duplicates
+        all_fields = list(set(display_fields + (search_fields if search_fields else [])))
+
         # Build search filters
         filters = []
         if search_term and search_fields:
@@ -1684,26 +1990,493 @@ def search_documents(doctype, search_fields, search_term, limit=10):
             documents = frappe.get_all(
                 doctype,
                 or_filters=filters,
-                fields=["name"] + search_fields,
+                fields=all_fields,
                 limit=limit
             )
         else:
             # No search term, return recent documents
             documents = frappe.get_all(
                 doctype,
-                fields=["name"] + (search_fields if search_fields else ["name"]),
+                fields=all_fields,
                 limit=limit,
                 order_by="modified desc"
             )
-        
+
+        # Enhance documents with user-friendly display names
+        enhanced_documents = enhance_documents_with_display_names(documents, doctype)
+
         return {
             "success": True,
-            "documents": documents,
-            "count": len(documents),
+            "documents": enhanced_documents,
+            "count": len(enhanced_documents),
             "search_term": search_term,
-            "search_fields": search_fields
+            "search_fields": search_fields,
+            "display_fields_used": display_fields  # For debugging/transparency
         }
-        
+
     except Exception as e:
         frappe.log_error(f"Error searching documents", f"DocType: {doctype}, Error: {str(e)}")
         return {"success": False, "error": str(e)}
+
+
+# Document Display Utilities for UUID-named documents
+
+def get_display_fields_for_doctype(doctype):
+    """Get the best fields to display for a DocType to handle UUID-named documents"""
+    try:
+        meta = frappe.get_meta(doctype)
+        display_fields = ["name"]  # Always include name for system use
+
+        # Add title field if it exists and is different from name
+        if meta.title_field and meta.title_field != "name":
+            display_fields.append(meta.title_field)
+
+        # Add common display fields that exist in this DocType
+        common_display_fields = [
+            "title", "subject", "description", "full_name", "customer_name",
+            "item_name", "project_name", "company_name", "supplier_name",
+            "employee_name", "user_name", "email", "email_id", "phone",
+            "mobile_no", "first_name", "last_name", "item_code", "item_group"
+        ]
+
+        # Add the first available common field that's not already included
+        for field in common_display_fields:
+            if meta.has_field(field) and field not in display_fields:
+                display_fields.append(field)
+                break  # Only add one additional display field to keep it clean
+
+        # If no good display field found, try to find any text field that might be useful
+        if len(display_fields) == 1:  # Only has 'name'
+            for field in meta.fields:
+                if (field.fieldtype in ["Data", "Text", "Small Text"] and
+                    field.fieldname not in ["name", "naming_series"] and
+                    not field.fieldname.startswith("_") and
+                    field.fieldname not in display_fields):
+                    display_fields.append(field.fieldname)
+                    break
+
+        return display_fields
+
+    except Exception as e:
+        frappe.log_error(f"Error getting display fields for {doctype}", str(e))
+        return ["name"]  # Fallback to just name
+
+
+def format_document_display_name(doc_dict, doctype):
+    """Format a document for user-friendly display, handling UUID names"""
+    try:
+        name = doc_dict.get("name", "")
+        if not name:
+            return "Unknown Document"
+
+        # Get meta information for this DocType
+        meta = frappe.get_meta(doctype)
+        display_name = None
+
+        # Try to get the title field value first
+        if meta.title_field and doc_dict.get(meta.title_field):
+            display_name = str(doc_dict.get(meta.title_field)).strip()
+
+        # If no title field or it's empty, try common display fields
+        if not display_name:
+            display_field_candidates = [
+                "title", "subject", "description", "full_name", "customer_name",
+                "item_name", "project_name", "company_name", "supplier_name",
+                "employee_name", "first_name", "email", "email_id"
+            ]
+
+            for field in display_field_candidates:
+                if doc_dict.get(field):
+                    display_name = str(doc_dict.get(field)).strip()
+                    if display_name:
+                        break
+
+        # Check if the name looks like a UUID (contains hyphens and is long)
+        is_uuid_like = (len(name) > 20 and "-" in name and
+                       len([c for c in name if c.isalnum() or c == "-"]) == len(name))
+
+        # Format the display name
+        if display_name and display_name != name:
+            if is_uuid_like:
+                # For UUID-like names, show display name with abbreviated UUID
+                short_uuid = name[:8] + "..." if len(name) > 8 else name
+                return f"{display_name} ({short_uuid})"
+            else:
+                # For normal names, show both if they're different
+                return f"{display_name} ({name})"
+        else:
+            # No meaningful display name found, return the name as-is
+            return name
+
+    except Exception as e:
+        frappe.log_error(f"Error formatting display name for {doctype}", str(e))
+        return doc_dict.get("name", "Unknown Document")
+
+
+def enhance_documents_with_display_names(documents, doctype):
+    """Enhance a list of documents with user-friendly display names"""
+    try:
+        enhanced_documents = []
+
+        for doc in documents:
+            enhanced_doc = doc.copy()
+            enhanced_doc["display_name"] = format_document_display_name(doc, doctype)
+            enhanced_documents.append(enhanced_doc)
+
+        return enhanced_documents
+
+    except Exception as e:
+        frappe.log_error(f"Error enhancing documents with display names", str(e))
+        return documents  # Return original documents if enhancement fails
+
+
+# Todo-specific functions for subtask management
+
+@frappe.whitelist()
+def analyze_todo_complexity(draft_id, todo_data, context=""):
+    """Analyze if a todo is complex enough to warrant breaking down into subtasks"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to analyze this draft"))
+
+        # Extract todo information
+        title = todo_data.get("title", "")
+        description = todo_data.get("description", "")
+        estimated_hours = todo_data.get("estimated_hours", 0)
+
+        # Complexity indicators
+        complexity_score = 0
+        complexity_reasons = []
+
+        # Check estimated hours
+        if estimated_hours and estimated_hours > 8:
+            complexity_score += 3
+            complexity_reasons.append(f"Estimated {estimated_hours} hours (>8 hours suggests complex task)")
+
+        # Check description length and content
+        if description:
+            word_count = len(description.split())
+            if word_count > 20:
+                complexity_score += 2
+                complexity_reasons.append(f"Detailed description ({word_count} words) suggests multiple components")
+
+            # Check for complexity keywords
+            complexity_keywords = [
+                "build", "implement", "create system", "develop", "design and build",
+                "integrate", "portal", "dashboard", "authentication", "api", "database",
+                "frontend", "backend", "testing", "deployment", "documentation"
+            ]
+
+            description_lower = description.lower()
+            found_keywords = [kw for kw in complexity_keywords if kw in description_lower]
+            if len(found_keywords) >= 3:
+                complexity_score += 2
+                complexity_reasons.append(f"Multiple technical keywords found: {', '.join(found_keywords[:3])}")
+
+            # Check for multiple action verbs
+            action_verbs = ["create", "build", "implement", "design", "develop", "integrate", "test", "deploy", "configure", "setup"]
+            found_verbs = [verb for verb in action_verbs if verb in description_lower]
+            if len(found_verbs) >= 3:
+                complexity_score += 2
+                complexity_reasons.append(f"Multiple action verbs suggest multiple phases: {', '.join(found_verbs[:3])}")
+
+        # Check title for project-like indicators
+        if title:
+            title_lower = title.lower()
+            project_indicators = ["portal", "system", "platform", "application", "website", "integration"]
+            if any(indicator in title_lower for indicator in project_indicators):
+                complexity_score += 1
+                complexity_reasons.append("Title suggests a substantial project")
+
+        # Determine if subtasks are recommended
+        is_complex = complexity_score >= 4
+        recommendation = "recommended" if is_complex else "optional" if complexity_score >= 2 else "not_needed"
+
+        return {
+            "success": True,
+            "is_complex": is_complex,
+            "complexity_score": complexity_score,
+            "recommendation": recommendation,
+            "reasons": complexity_reasons,
+            "analysis_summary": f"Complexity score: {complexity_score}/10. Subtask breakdown is {recommendation}."
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Error analyzing todo complexity", str(e))
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def suggest_subtask_breakdown(draft_id, todo_description, estimated_hours=None, complexity_indicators=None):
+    """Analyze a todo and suggest subtask breakdown using AI"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+
+        # Get AI configuration
+        from wizardz.wizardz.doctype.wizardz_settings.wizardz_settings import WizardzSettings
+        ai_config = WizardzSettings.get_ai_config()
+
+        if not ai_config["api_key"]:
+            return {"success": False, "error": "OpenAI API key not configured"}
+
+        # Build prompt for subtask suggestion
+        prompt = f"""Analyze this todo and suggest how to break it down into 3-7 manageable subtasks:
+
+Todo Description: {todo_description}
+{f"Estimated Hours: {estimated_hours}" if estimated_hours else ""}
+{f"Complexity Indicators: {', '.join(complexity_indicators)}" if complexity_indicators else ""}
+
+Please suggest subtasks that:
+1. Are each completable in 1-8 hours
+2. Have clear, actionable titles starting with action verbs
+3. Include specific deliverables
+4. Follow logical sequence/dependencies
+5. Collectively complete the main todo
+
+Return your response as a JSON object with this structure:
+{{
+    "suggested_subtasks": [
+        {{
+            "title": "Action-oriented title",
+            "description": "Specific deliverable description",
+            "estimated_hours": 4,
+            "priority": "High/Medium/Low",
+            "order": 1
+        }}
+    ],
+    "reasoning": "Brief explanation of the breakdown approach"
+}}"""
+
+        # Call OpenAI API
+        import openai
+        client = openai.OpenAI(api_key=ai_config["api_key"])
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are an expert project manager who excels at breaking down complex tasks into manageable subtasks."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1000,
+            temperature=0.7
+        )
+
+        # Parse AI response
+        ai_response = response.choices[0].message.content.strip()
+
+        try:
+            # Try to parse as JSON
+            suggestion_data = json.loads(ai_response)
+
+            return {
+                "success": True,
+                "suggested_subtasks": suggestion_data.get("suggested_subtasks", []),
+                "reasoning": suggestion_data.get("reasoning", ""),
+                "ai_response": ai_response
+            }
+
+        except json.JSONDecodeError:
+            # If JSON parsing fails, return raw response
+            return {
+                "success": True,
+                "suggested_subtasks": [],
+                "reasoning": ai_response,
+                "ai_response": ai_response,
+                "note": "AI response was not in expected JSON format"
+            }
+
+    except Exception as e:
+        frappe.log_error(f"Error suggesting subtask breakdown", str(e))
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def ask_subtask_breakdown(draft_id, todo_summary, suggested_subtasks=None, reasoning=""):
+    """Ask user if they want to break down the todo into subtasks"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+
+        # Format the question with suggested subtasks
+        if suggested_subtasks and len(suggested_subtasks) > 0:
+            subtask_list = ""
+            for i, subtask in enumerate(suggested_subtasks, 1):
+                title = subtask.get("title", f"Subtask {i}")
+                description = subtask.get("description", "")
+                estimated_hours = subtask.get("estimated_hours", "")
+
+                subtask_list += f"\n{i}. **{title}**"
+                if description:
+                    subtask_list += f" - {description}"
+                if estimated_hours:
+                    subtask_list += f" ({estimated_hours}h)"
+
+            question = f"""Based on your todo '{todo_summary}', I can see this is a substantial task that would benefit from being broken down into smaller, manageable subtasks.
+
+{reasoning if reasoning else "This approach will help you track progress more effectively and make the work less overwhelming."}
+
+Here's my suggested breakdown:
+{subtask_list}
+
+Would you like me to:
+1. **Create the main todo with these subtasks** - I'll create the parent todo plus all subtasks, properly linked together
+2. **Create just the main todo** - Keep it simple with a single todo item
+3. **Modify the subtasks** - Let me know what changes you'd like to the suggested breakdown
+
+What would you prefer?"""
+
+        else:
+            question = f"""I notice your todo '{todo_summary}' seems like it could be a complex task. Would you like me to break it down into smaller, more manageable subtasks?
+
+This can help with:
+- Better progress tracking
+- Clearer action items
+- Less overwhelming workflow
+- Better time estimation
+
+Would you like me to suggest a breakdown into subtasks, or would you prefer to keep it as a single todo?"""
+
+        return {
+            "success": True,
+            "question": question,
+            "context": "subtask_breakdown_decision",
+            "suggested_subtasks": suggested_subtasks or [],
+            "todo_summary": todo_summary
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Error asking about subtask breakdown", str(e))
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def create_subtasks(draft_id, parent_todo_data, subtasks):
+    """Create parent todo and multiple related subtasks in the multi-doctype structure"""
+    try:
+        draft = frappe.get_doc("Wizardz Draft", draft_id)
+        wizard_config = frappe.get_doc("Wizardz Configuration", draft.wizard_config)
+
+        if not wizard_config.has_permission_for_user():
+            frappe.throw(_("You don't have permission to modify this draft"))
+
+        # Validate that we're working with Todo DocType
+        if draft.target_doctype != "Todo":
+            return {"success": False, "error": "create_subtasks can only be used with Todo DocType"}
+
+        # Get current draft data
+        current_data = draft.get_draft_data_dict()
+
+        # Initialize multi-doctype structure
+        if "_multi_doctype" not in current_data:
+            current_data["_multi_doctype"] = {
+                "dependencies": [],
+                "creation_order": [],
+                "doctypes": {}
+            }
+
+        # Set up the parent todo data in the main draft
+        for field, value in parent_todo_data.items():
+            if field not in ["_multi_doctype"]:
+                current_data[field] = value
+
+        # Ensure parent todo is marked appropriately
+        current_data["is_subtask"] = False  # Parent is not a subtask
+
+        # Initialize Todo doctype in multi-doctype structure for subtasks
+        if "Todo" not in current_data["_multi_doctype"]["doctypes"]:
+            current_data["_multi_doctype"]["doctypes"]["Todo"] = []
+
+        # Create subtask entries
+        subtask_entries = []
+        for i, subtask in enumerate(subtasks):
+            subtask_data = {
+                "title": subtask.get("title", f"Subtask {i+1}"),
+                "description": subtask.get("description", ""),
+                "priority": subtask.get("priority", "Medium"),
+                "estimated_hours": subtask.get("estimated_hours", 0),
+                "is_subtask": True,
+                "parent_todo": "{{PARENT_TODO_NAME}}",  # Will be replaced with actual parent name after creation
+                "status": "Open",
+                "subtask_order": i + 1
+            }
+
+            # Add optional fields if provided
+            if subtask.get("due_date"):
+                subtask_data["due_date"] = subtask.get("due_date")
+            if subtask.get("assigned_to"):
+                subtask_data["assigned_to"] = subtask.get("assigned_to")
+
+            subtask_entries.append(subtask_data)
+
+        # Store subtasks in multi-doctype structure
+        current_data["_multi_doctype"]["doctypes"]["Todo"] = subtask_entries
+
+        # Add dependency for subtask creation (they depend on parent being created first)
+        dependency_exists = any(
+            dep["doctype"] == "Todo"
+            for dep in current_data["_multi_doctype"]["dependencies"]
+        )
+
+        if not dependency_exists:
+            current_data["_multi_doctype"]["dependencies"].append({
+                "doctype": "Todo",
+                "reason": f"Subtasks for '{parent_todo_data.get('title', 'Main Todo')}'",
+                "priority": 2,  # Create after parent
+                "status": "pending"
+            })
+
+        # Update creation order
+        current_data["_multi_doctype"]["creation_order"] = [
+            {"doctype": draft.target_doctype, "priority": 1},  # Parent first
+            {"doctype": "Todo", "priority": 2}  # Subtasks second
+        ]
+
+        # Save the updated draft data
+        draft.update_draft_data(current_data)
+        draft.status = "In Progress"
+        draft.save()
+
+        return {
+            "success": True,
+            "message": f"Created parent todo with {len(subtasks)} subtasks",
+            "parent_todo": parent_todo_data,
+            "subtasks_count": len(subtasks),
+            "subtasks": subtask_entries,
+            "structure": "multi_doctype"
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Error creating subtasks", str(e))
+        return {"success": False, "error": str(e)}
+
+
+def get_document_display_name(doctype, name):
+    """Get the display name for a specific document"""
+    try:
+        if not frappe.db.exists(doctype, name):
+            return name
+
+        # Get the display fields for this doctype
+        display_fields = get_display_fields_for_doctype(doctype)
+
+        # Fetch the document with display fields
+        doc_data = frappe.db.get_value(doctype, name, display_fields, as_dict=True)
+
+        if doc_data:
+            return format_document_display_name(doc_data, doctype)
+        else:
+            return name
+
+    except Exception as e:
+        frappe.log_error(f"Error getting display name for {doctype} {name}", str(e))
+        return name

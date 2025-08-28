@@ -49,24 +49,24 @@ function page_changed(event) {
                     
                     // Check if this doctype has a wizard configuration
                     checkForWizardConfiguration(frm.doctype, function(hasWizard, config) {
-                        console.log(`Wizardz: Wizard check for ${frm.doctype} - hasWizard: ${hasWizard}`);
+                        // console.log(`Wizardz: Wizard check for ${frm.doctype} - hasWizard: ${hasWizard}`);
                         if (hasWizard) {
                             try {
-                                console.log(`Wizardz: About to call addAIAssistantButtonToForm for ${frm.doctype}`);
+                                // console.log(`Wizardz: About to call addAIAssistantButtonToForm for ${frm.doctype}`);
                                 addAIAssistantButtonToForm(frm, config);
-                                console.log(`Wizardz: addAIAssistantButtonToForm call completed`);
+                                // console.log(`Wizardz: addAIAssistantButtonToForm call completed`);
                             } catch (error) {
                                 console.error(`Wizardz: Error calling addAIAssistantButtonToForm:`, error);
                                 console.error(`Wizardz: Error stack:`, error.stack);
                             }
                         } else {
-                            console.log(`Wizardz: No wizard configuration found for ${frm.doctype}`);
+                            // console.log(`Wizardz: No wizard configuration found for ${frm.doctype}`);
                         }
                     });
                 }
             });
             
-            console.log(`Wizardz: Form integration setup for ${doctype}`);
+            // console.log(`Wizardz: Form integration setup for ${doctype}`);
         }
         
         // List views are handled by the event-based system below
@@ -78,7 +78,7 @@ function setupListViewIntegration() {
     $(document).on('list_view_loaded', function(e, list_view) {
         if (!list_view || !list_view.doctype) return;
         
-        console.log(`Wizardz: List view loaded for ${list_view.doctype}`);
+        // console.log(`Wizardz: List view loaded for ${list_view.doctype}`);
         
         checkForWizardConfiguration(list_view.doctype, function(hasWizard, config) {
             if (hasWizard) {
@@ -99,7 +99,7 @@ function setupListViewIntegration() {
                 if (!cur_list.wizardz_processed) {
                     cur_list.wizardz_processed = true;
                     
-                    console.log(`Wizardz: Periodic check found ${doctype} list view`);
+                    // console.log(`Wizardz: Periodic check found ${doctype} list view`);
                     
                     checkForWizardConfiguration(doctype, function(hasWizard, config) {
                         if (hasWizard) {
@@ -111,30 +111,30 @@ function setupListViewIntegration() {
         }
     }, 1000); // Check every second
     
-    console.log('Wizardz: List view integration setup completed');
+    // console.log('Wizardz: List view integration setup completed');
 }
 
 // Form view button integration
 function addAIAssistantButtonToForm(frm, wizard_config) {
-    console.log(`Wizardz: addAIAssistantButtonToForm called for ${frm.doctype}`);
+    // console.log(`Wizardz: addAIAssistantButtonToForm called for ${frm.doctype}`);
     
     // Remove any existing buttons first to ensure we get the right mode
     if (frm.custom_buttons) {
         if (frm.custom_buttons['AI Create']) {
             frm.custom_buttons['AI Create'].remove();
             delete frm.custom_buttons['AI Create'];
-            console.log(`Wizardz: Removed existing AI Create button`);
+            // console.log(`Wizardz: Removed existing AI Create button`);
         }
         if (frm.custom_buttons['AI Update']) {
             frm.custom_buttons['AI Update'].remove();
             delete frm.custom_buttons['AI Update'];
-            console.log(`Wizardz: Removed existing AI Update button`);
+            // console.log(`Wizardz: Removed existing AI Update button`);
         }
         // Also remove old button names for backward compatibility
         if (frm.custom_buttons['AI Assistant']) {
             frm.custom_buttons['AI Assistant'].remove();
             delete frm.custom_buttons['AI Assistant'];
-            console.log(`Wizardz: Removed existing AI Assistant button`);
+            // console.log(`Wizardz: Removed existing AI Assistant button`);
         }
     }
     
@@ -142,7 +142,7 @@ function addAIAssistantButtonToForm(frm, wizard_config) {
     let buttonText = 'AI Create';
     let buttonAction = 'create';
     
-    console.log(`Wizardz: Document detection - name: "${frm.doc.name}", __islocal: ${frm.doc.__islocal}, doctype: ${frm.doctype}`);
+    // console.log(`Wizardz: Document detection - name: "${frm.doc.name}", __islocal: ${frm.doc.__islocal}, doctype: ${frm.doctype}`);
     
     // Check if this is an existing document (not new)
     if (frm.doc.name && 
@@ -154,16 +154,16 @@ function addAIAssistantButtonToForm(frm, wizard_config) {
         // Existing document - update mode
         buttonText = 'AI Update';
         buttonAction = 'update';
-        console.log(`Wizardz: Detected existing document "${frm.doc.name}" - using update mode`);
+        // console.log(`Wizardz: Detected existing document "${frm.doc.name}" - using update mode`);
     } else {
-        console.log(`Wizardz: Detected new document - using create mode`);
+        // console.log(`Wizardz: Detected new document - using create mode`);
     }
     
     // Add AI Assistant button as primary button to the form toolbar
     frm.add_custom_button(
         __(buttonText),
         function() {
-            console.log(`Wizardz: Button clicked - action: ${buttonAction}, doctype: ${frm.doctype}, doc:`, frm.doc);
+            // console.log(`Wizardz: Button clicked - action: ${buttonAction}, doctype: ${frm.doctype}, doc:`, frm.doc);
             openWizardModal(wizard_config, frm.doctype, frm.doc, buttonAction);
         }
         // No group parameter = primary button in toolbar
@@ -182,14 +182,14 @@ function addAIAssistantButtonToForm(frm, wizard_config) {
         }
     }
     
-    console.log(`Wizardz: Added AI Assistant button to ${frm.doctype} form view (${buttonAction} mode)`);
+    // console.log(`Wizardz: Added AI Assistant button to ${frm.doctype} form view (${buttonAction} mode)`);
 }
 
 // List view button integration
 function addAIAssistantButtonToList(list_view, wizard_config) {
     // Check if list_view and required properties exist
     if (!list_view || !list_view.page || !list_view.page.add_inner_button) {
-        console.log('Wizardz: List view or page object not ready yet');
+        // console.log('Wizardz: List view or page object not ready yet');
         return;
     }
     
@@ -225,10 +225,8 @@ function addAIAssistantButtonToList(list_view, wizard_config) {
                 ai_button.addClass('btn-primary wizardz-ai-btn');
                 ai_button.attr('title', `AI Create - Create new ${list_view.doctype}`);
                 
-                console.log(`Wizardz: Added AI Create button to ${list_view.doctype} list view`);
-            } else {
-                console.log(`Wizardz: Could not find AI Create button to style for ${list_view.doctype}`);
-            }
+                // console.log(`Wizardz: Added AI Create button to ${list_view.doctype} list view`);
+            } 
         }, 300); // Increased delay to ensure button is fully rendered
         
     } catch (error) {
@@ -238,9 +236,9 @@ function addAIAssistantButtonToList(list_view, wizard_config) {
 
 // Unified modal opening function
 function openWizardModal(wizard_config, doctype, doc = null, action = 'create') {
-    console.log(`Wizardz: openWizardModal called with action: ${action}, doctype: ${doctype}`);
+    // console.log(`Wizardz: openWizardModal called with action: ${action}, doctype: ${doctype}`);
     // Create and show the wizard modal using the shared modal class
     const modal = new WizardzModal(wizard_config, doctype, doc, action);
-    console.log(`Wizardz: Modal created with action: ${modal.action}`);
+    // console.log(`Wizardz: Modal created with action: ${modal.action}`);
     modal.show();
 }
